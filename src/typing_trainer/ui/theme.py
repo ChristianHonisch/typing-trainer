@@ -69,10 +69,14 @@ COLOR_BTN_DISABLED_TEXT = "#666666"
 
 from typing_trainer.models.letter_state import LetterState  # noqa: E402
 
+COLOR_MASTERED = "#cc9900"
+"""Gold / amber for MASTERED letters — distinct from STABLE green."""
+
 STATE_COLORS: dict[LetterState, str] = {
     LetterState.INTRODUCING: COLOR_INFO,
     LetterState.CONSOLIDATING: COLOR_WARNING,
     LetterState.STABLE: COLOR_SUCCESS,
+    LetterState.MASTERED: COLOR_MASTERED,
     LetterState.DEGRADED: COLOR_ERROR,
 }
 

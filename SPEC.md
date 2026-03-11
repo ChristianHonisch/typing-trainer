@@ -121,6 +121,31 @@ Each letter in the active set has one of the following states:
 
 This state is visible to the user at all times via a color-coded letter overview.
 
+### Mastery
+
+`mastery_score` (0.0–1.0) tracks long-term motor pattern encoding, separate from `stability_score` (short-term session quality). Mastered letters get reduced training weight (0.5 base instead of 1.0), freeing up practice share for letters that still need work.
+
+**State lifecycle**: `introducing -> consolidating -> stable -> mastered <-> degraded`
+
+**Earning mastery**: After each session, for each letter that is STABLE or MASTERED with rolling accuracy >= 95%:
+- `delta = qualifying_keystrokes_this_session / mastery_keystrokes_required`
+- `mastery_score = min(1.0, mastery_score + delta)`
+- All modes (relearning, speed, transition) count equally as qualifying keystrokes
+- STABLE -> MASTERED when `mastery_score >= mastery_threshold` (default 0.8)
+- At ~19 qualifying keystrokes/session: ~78 sessions (~2.5 months daily) to reach 1.0
+
+**Mastery decay**: Ebbinghaus-inspired exponential decay when not practiced:
+- `mastery(t) = mastery_0 * e^(-ln(2) * hours / (half_life_days * 24))`
+- Half-life scales linearly with mastery: 14 days at mastery=0, 90 days at mastery=1.0
+- A 2-week break at mastery=1.0: drops to ~0.87 (still MASTERED)
+- A month-long break: drops below 0.8 (exits MASTERED -> STABLE)
+
+**Degradation**: MASTERED -> DEGRADED on same trigger as STABLE (rolling error > 5%). mastery_score is NOT reset — it decays naturally. mastery_qualifying_keystrokes freezes (no penalty). Recovery from DEGRADED goes to STABLE; re-entry to MASTERED happens if mastery_score is still above threshold.
+
+**Training weight for MASTERED**: 0.5 base + bonuses. At 26 letters with 20 mastered (0.5), 5 stable (1.0), 1 introducing (4.0): the introducing letter gets ~25% share instead of ~17%.
+
+**Bootstrap**: On upgrade, mastery is retroactively computed from session history by replaying qualifying keystrokes and decay for each letter.
+
 ### Space Character
 
 Space is always available and is not part of the letter introduction system. It is not tracked in the per-letter state machine (no LetterStats, no rolling window). Space errors count toward overall run accuracy but not toward any letter's advancement criteria.
@@ -175,17 +200,20 @@ The weighting system is **need-based and additive**. There is no corpus frequenc
 ### Per-Letter Weight
 
 ```
-weight(letter) = 1.0 + state_bonus + accuracy_gap_bonus + volume_deficit_bonus
+weight(letter) = base + state_bonus + accuracy_gap_bonus + volume_deficit_bonus
 ```
 
+Where `base` = 0.5 for MASTERED letters, 1.0 for all others.
+
 **State bonus** (based on current letter state):
-| State | Bonus |
-|---|---|
-| `introducing` | 3.0 |
-| `degraded` | 2.0 |
-| `consolidating` | 1.0 |
-| `stable` (recently) | 0.0–1.0 (decaying) |
-| `stable` (settled) | 0.0 |
+| State | Base | Bonus | Total (no other bonuses) |
+|---|---|---|---|
+| `introducing` | 1.0 | 3.0 | 4.0 |
+| `degraded` | 1.0 | 2.0 | 3.0 |
+| `consolidating` | 1.0 | 1.0 | 2.0 |
+| `stable` (recently) | 1.0 | 0.0–1.0 (decaying) | 1.0–2.0 |
+| `stable` (settled) | 1.0 | 0.0 | 1.0 |
+| `mastered` | 0.5 | 0.0 | 0.5 |
 
 **Recently-stable consolidation bonus:** Letters that just reached `stable` state get an additional bonus that linearly decays to 0 over `recently_stable_sessions` (default 10) sessions. This ensures recently-stabilized letters continue getting meaningful practice to solidify the motor pattern, rather than immediately dropping to minimum weight.
 
@@ -473,12 +501,22 @@ All thresholds are user-configurable via JSON file. Missing keys use defaults.
 |---|---|---|
 | `degraded_recovery_margin` | 0.8 | Multiplier for DEGRADED -> STABLE recovery threshold |
 
+### Mastery
+
+| Parameter | Default | Description |
+|---|---|---|
+| `mastery_keystrokes_required` | 1500 | Qualifying keystrokes for mastery_score delta of 1.0 |
+| `mastery_threshold` | 0.8 | mastery_score at which STABLE -> MASTERED |
+| `mastery_half_life_min_days` | 14.0 | Mastery decay half-life (days) at mastery_score = 0.0 |
+| `mastery_half_life_max_days` | 90.0 | Mastery decay half-life (days) at mastery_score = 1.0 |
+| `weight_mastered` | 0.5 | Base training weight for MASTERED letters |
+
 ### Spaced Repetition
 
 | Parameter | Default | Description |
 |---|---|---|
 | `half_life_consolidating_hours` | 24.0 | Stability decay half-life for non-stable letters |
-| `half_life_stable_hours` | 72.0 | Stability decay half-life for stable letters |
+| `half_life_stable_hours` | 72.0 | Stability decay half-life for stable/mastered letters |
 | `stability_revert_threshold` | 0.5 | Stability below which a letter reverts to consolidating |
 
 ### Paths and Language

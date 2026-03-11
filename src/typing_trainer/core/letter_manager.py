@@ -56,7 +56,9 @@ class LetterManager:
     """Manages the active letter set and state transitions.
 
     State machine per letter:
-        introducing -> consolidating -> stable <-> degraded
+        introducing -> consolidating -> stable -> mastered
+                                         ↑          ↓
+                                         ← degraded ←
     """
 
     def __init__(self, config: Config) -> None:
@@ -252,7 +254,7 @@ class LetterManager:
             new_state = self._compute_new_state(stats)
 
             if (
-                stats.state == LetterState.STABLE
+                stats.state in (LetterState.STABLE, LetterState.MASTERED)
                 and new_state == LetterState.DEGRADED
             ):
                 warnings.append(
@@ -291,6 +293,33 @@ class LetterManager:
                         stats.state = LetterState.CONSOLIDATING
                         stats.sessions_in_current_state = 0
 
+            # Update mastery — only for qualifying letters.
+            # A letter qualifies when:
+            # - Currently STABLE or MASTERED
+            # - Actually practiced this session
+            # - Rolling accuracy >= advancement_accuracy
+            # All modes (relearning, speed, transition) count equally.
+            if (
+                was_practiced
+                and stats.state in (LetterState.STABLE, LetterState.MASTERED)
+                and stats.rolling_error_rate
+                <= (1.0 - self.config.advancement_accuracy)
+            ):
+                qualifying_ks = session.per_letter_keystrokes(letter)
+                if qualifying_ks > 0:
+                    delta = qualifying_ks / self.config.mastery_keystrokes_required
+                    stats.mastery_score = min(1.0, stats.mastery_score + delta)
+                    stats.mastery_qualifying_keystrokes += qualifying_ks
+
+                    # Check for STABLE -> MASTERED promotion (may have just
+                    # crossed the threshold with this session's increment)
+                    if (
+                        stats.state == LetterState.STABLE
+                        and stats.mastery_score >= self.config.mastery_threshold
+                    ):
+                        stats.state = LetterState.MASTERED
+                        stats.sessions_in_current_state = 0
+
         return active_letters, warnings
 
     def _compute_new_state(self, stats: LetterStats) -> LetterState:
@@ -317,12 +346,23 @@ class LetterManager:
             case LetterState.STABLE:
                 if self._is_degraded(stats):
                     return LetterState.DEGRADED
+                # Check for MASTERED transition
+                if stats.mastery_score >= self.config.mastery_threshold:
+                    return LetterState.MASTERED
                 return LetterState.STABLE
+
+            case LetterState.MASTERED:
+                # Same degradation trigger as STABLE
+                if self._is_degraded(stats):
+                    return LetterState.DEGRADED
+                return LetterState.MASTERED
 
             case LetterState.DEGRADED:
                 # Recovery uses rolling error rate (same metric as degradation
                 # entry) but with a tighter threshold to prevent oscillation.
                 # E.g. entry at >5% error, recovery at <=4% (with 0.8 margin).
+                # Always recovers to STABLE — re-entry to MASTERED happens
+                # at the next session if mastery_score is still above threshold.
                 entry_threshold = 1.0 - self.config.advancement_accuracy
                 recovery_threshold = entry_threshold * self.config.degraded_recovery_margin
                 if stats.rolling_error_rate <= recovery_threshold:

@@ -230,6 +230,7 @@ class TextGenerator:
                     recently_stable_sessions=self.config.recently_stable_sessions,
                     volume_window=self.config.advancement_accuracy_window,
                     volume_deficit=self.config.weight_volume_deficit,
+                    mastered=self.config.weight_mastered,
                 )
             )
 

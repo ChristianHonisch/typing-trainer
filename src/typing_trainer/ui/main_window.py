@@ -313,7 +313,11 @@ class MainWindow(QMainWindow):
             stats.rolling_error_rate_long = 1.0 - acc_long
 
         # Letter overview (uses rolling_error_rate_long)
-        self._letter_overview.update_display(self._active_letters)
+        remaining = [
+            ch for ch in self.letter_mgr.introduction_order
+            if ch not in self._active_letters
+        ]
+        self._letter_overview.update_display(self._active_letters, remaining)
 
         # Config widget letter display
         all_stable = all(

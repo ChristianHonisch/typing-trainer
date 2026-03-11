@@ -41,7 +41,7 @@ class SpacedRepetition:
         self.config = config
 
     def get_half_life_hours(self, state: LetterState) -> float:
-        """Get the decay half-life for a letter state."""
+        """Get the stability decay half-life for a letter state."""
         match state:
             case LetterState.INTRODUCING:
                 return self.config.half_life_consolidating_hours
@@ -49,7 +49,11 @@ class SpacedRepetition:
                 return self.config.half_life_consolidating_hours
             case LetterState.STABLE:
                 return self.config.half_life_stable_hours
+            case LetterState.MASTERED:
+                return self.config.half_life_stable_hours
             case LetterState.DEGRADED:
+                return self.config.half_life_consolidating_hours
+            case _:
                 return self.config.half_life_consolidating_hours
 
     def compute_current_stability(
@@ -76,6 +80,43 @@ class SpacedRepetition:
         # Convert half-life to decay constant: lambda = ln(2) / half_life
         decay_constant = math.log(2) / half_life
         decayed = stats.stability_score * math.exp(-decay_constant * hours_elapsed)
+        return max(0.0, decayed)
+
+    def compute_mastery_decay(
+        self,
+        stats: LetterStats,
+        now: datetime | None = None,
+    ) -> float:
+        """Compute the decayed mastery score accounting for time elapsed.
+
+        mastery(t) = mastery_0 * e^(-ln(2) * hours / (half_life_days * 24))
+
+        The half-life scales linearly with the current mastery level:
+            half_life_days = min + mastery * (max - min)
+
+        At mastery=0: 14 days; at mastery=1.0: 90 days.
+        """
+        if stats.last_practiced is None or stats.mastery_score <= 0:
+            return stats.mastery_score
+
+        if now is None:
+            now = datetime.now()
+
+        hours_elapsed = (now - stats.last_practiced).total_seconds() / 3600.0
+        if hours_elapsed <= 0:
+            return stats.mastery_score
+
+        half_life_days = (
+            self.config.mastery_half_life_min_days
+            + stats.mastery_score
+            * (
+                self.config.mastery_half_life_max_days
+                - self.config.mastery_half_life_min_days
+            )
+        )
+        half_life_hours = half_life_days * 24.0
+        decay_constant = math.log(2) / half_life_hours
+        decayed = stats.mastery_score * math.exp(-decay_constant * hours_elapsed)
         return max(0.0, decayed)
 
     def get_review_status(
@@ -127,6 +168,12 @@ class SpacedRepetition:
     ) -> tuple[dict[str, LetterStats], list[str]]:
         """Apply time-based decay to all letters and revert any that dropped.
 
+        Decays both stability_score and mastery_score.
+        - STABLE letters whose stability drops below threshold revert to
+          CONSOLIDATING.
+        - MASTERED letters whose mastery_score drops below mastery_threshold
+          revert to STABLE (sessions_in_current_state resets).
+
         Returns (updated_letters, list_of_reverted_letters).
         """
         if now is None:
@@ -134,15 +181,29 @@ class SpacedRepetition:
 
         reverted: list[str] = []
         for stats in active_letters.values():
-            current = self.compute_current_stability(stats, now)
-            stats.stability_score = current
+            # Stability decay
+            current_stability = self.compute_current_stability(stats, now)
+            stats.stability_score = current_stability
 
             if (
-                current < self.config.stability_revert_threshold
+                current_stability < self.config.stability_revert_threshold
                 and stats.state == LetterState.STABLE
             ):
                 stats.state = LetterState.CONSOLIDATING
                 stats.sessions_in_current_state = 0
                 reverted.append(stats.letter)
+
+            # Mastery decay
+            if stats.mastery_score > 0:
+                current_mastery = self.compute_mastery_decay(stats, now)
+                stats.mastery_score = current_mastery
+
+                if (
+                    stats.state == LetterState.MASTERED
+                    and current_mastery < self.config.mastery_threshold
+                ):
+                    stats.state = LetterState.STABLE
+                    stats.sessions_in_current_state = 0
+                    reverted.append(stats.letter)
 
         return active_letters, reverted

@@ -84,3 +84,16 @@ class Session:
             else:
                 result[letter] = 0.0
         return result
+
+    def per_letter_keystrokes(self, letter: str) -> int:
+        """Total scored keystrokes for a specific letter across all runs.
+
+        Counts first-input keystrokes (correct + cognitive_error) as tracked
+        by PerLetterResult.total_attempts.  Does not include motor overflow,
+        burst repeat, or backspace keystrokes.
+        """
+        total = 0
+        for run in self.runs:
+            if letter in run.per_letter:
+                total += run.per_letter[letter].total_attempts
+        return total

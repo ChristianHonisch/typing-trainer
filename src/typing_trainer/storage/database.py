@@ -9,7 +9,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -72,14 +72,17 @@ CREATE TABLE IF NOT EXISTS keystrokes (
 );
 
 CREATE TABLE IF NOT EXISTS letter_states (
-    letter                      TEXT PRIMARY KEY,
-    state                       TEXT NOT NULL DEFAULT 'introducing',
-    stability_score             REAL NOT NULL DEFAULT 0.3,
-    last_practiced              TEXT,
-    error_rate_last_session     REAL NOT NULL DEFAULT 0.0,
-    sessions_in_current_state   INTEGER NOT NULL DEFAULT 0,
-    sessions_since_introduced   INTEGER NOT NULL DEFAULT 0,
-    accuracy_history            TEXT NOT NULL DEFAULT '[]'
+    letter                          TEXT PRIMARY KEY,
+    state                           TEXT NOT NULL DEFAULT 'introducing',
+    stability_score                 REAL NOT NULL DEFAULT 0.3,
+    last_practiced                  TEXT,
+    error_rate_last_session         REAL NOT NULL DEFAULT 0.0,
+    sessions_in_current_state       INTEGER NOT NULL DEFAULT 0,
+    sessions_since_introduced       INTEGER NOT NULL DEFAULT 0,
+    accuracy_history                TEXT NOT NULL DEFAULT '[]',
+    keystrokes_at_introduction      INTEGER NOT NULL DEFAULT 0,
+    mastery_score                   REAL NOT NULL DEFAULT 0.0,
+    mastery_qualifying_keystrokes   INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS active_letter_order (
@@ -220,23 +223,51 @@ class Database:
             )
             self.conn.commit()
 
-        # v6: Reclassify all keystrokes from raw measurement data.
-        # Re-runs ErrorClassifier on (position, timestamp_ms, expected_char,
-        # actual_char, is_backspace) and recomputes error_type,
-        # reaction_time_ms, and run-level aggregates.  Fixes historical
-        # misclassifications (e.g. motor overflow false positives on
-        # legitimate double-letters).  Idempotent — safe to run again but
-        # guarded by schema_version to avoid doing so on every startup.
-        current_version = self.conn.execute(
+        # --- Version-gated migrations ---
+        current_version_row = self.conn.execute(
             "SELECT version FROM schema_version"
         ).fetchone()
-        if current_version is not None and current_version[0] < 6:
-            # Local import to avoid circular dependency:
-            # database.py -> repository.py -> database.py
+        current_version = (
+            current_version_row[0] if current_version_row is not None else 0
+        )
+
+        if current_version < 6:
+            # v6: Reclassify all keystrokes from raw measurement data.
+            # Re-runs ErrorClassifier on (position, timestamp_ms,
+            # expected_char, actual_char, is_backspace) and recomputes
+            # error_type, reaction_time_ms, and run-level aggregates.
+            # Fixes historical misclassifications (e.g. motor overflow
+            # false positives on legitimate double-letters).
+            # Local import to avoid circular dependency.
             from typing_trainer.storage.repository import Repository
 
             repo = Repository(self)
             repo.reclassify_all_runs()
+            self.conn.commit()
+
+        if current_version < 7:
+            # v7: Add mastery columns to letter_states.
+            if "mastery_score" not in ls_columns:
+                self.conn.execute(
+                    "ALTER TABLE letter_states ADD COLUMN "
+                    "mastery_score REAL NOT NULL DEFAULT 0.0"
+                )
+            if "mastery_qualifying_keystrokes" not in ls_columns:
+                self.conn.execute(
+                    "ALTER TABLE letter_states ADD COLUMN "
+                    "mastery_qualifying_keystrokes INTEGER NOT NULL DEFAULT 0"
+                )
+            self.conn.commit()
+
+            # Bootstrap mastery from session history: replay all sessions
+            # to compute what mastery_score would be now.
+            from typing_trainer.storage.repository import Repository
+
+            repo = Repository(self)
+            repo.bootstrap_mastery()
+            self.conn.commit()
+
+        if current_version < SCHEMA_VERSION:
             self.conn.execute(
                 "UPDATE schema_version SET version = ?", (SCHEMA_VERSION,)
             )

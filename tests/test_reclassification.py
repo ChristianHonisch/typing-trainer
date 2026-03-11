@@ -637,14 +637,14 @@ class TestMigrationGuard:
     """v6 migration should run once and not repeat."""
 
     def test_migration_runs_once(self, tmp_path):
-        """Schema version is updated to 6 after reclassification."""
+        """Schema version is updated to current version after migrations."""
         db = Database(str(tmp_path / "test.db"))
         db.initialize()
 
         version = db.conn.execute(
             "SELECT version FROM schema_version"
         ).fetchone()
-        assert version[0] == 6
+        assert version[0] == 7
 
     def test_second_initialize_skips_reclassification(self, tmp_path):
         """Re-initializing the same DB should not re-run reclassification."""
@@ -675,5 +675,5 @@ class TestMigrationGuard:
         version = db2.conn.execute(
             "SELECT version FROM schema_version"
         ).fetchone()
-        assert version[0] == 6
+        assert version[0] == 7
         db2.close()

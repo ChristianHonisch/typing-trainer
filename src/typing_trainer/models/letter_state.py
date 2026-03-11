@@ -11,7 +11,9 @@ from datetime import datetime
 class LetterState(enum.Enum):
     """State of a letter in the active set.
 
-    Lifecycle: introducing -> consolidating -> stable <-> degraded
+    Lifecycle: introducing -> consolidating -> stable -> mastered
+                                                ↑          ↓
+                                                ← degraded ←
     """
 
     INTRODUCING = "introducing"
@@ -23,8 +25,16 @@ class LetterState(enum.Enum):
     STABLE = "stable"
     """Accuracy >= 95% across last 3 sessions."""
 
+    MASTERED = "mastered"
+    """Motor pattern deeply encoded through sustained distributed practice.
+
+    Entered when mastery_score >= mastery_threshold (default 0.8).
+    Gets reduced base training weight (0.5) to free share for others.
+    Reverts to DEGRADED on same trigger as STABLE (rolling error > 5%).
+    mastery_score is NOT reset on degradation — it decays naturally."""
+
     DEGRADED = "degraded"
-    """Was stable, now below threshold for >= 2 sessions."""
+    """Was stable/mastered, now below threshold."""
 
 
 class ErrorType(enum.Enum):
@@ -99,6 +109,19 @@ class LetterStats:
     # Populated at runtime from DB query; not persisted.
     rolling_keystroke_count: int = 0
 
+    # Mastery: long-term motor pattern encoding (0.0–1.0).
+    # Builds slowly via qualifying keystrokes, decays over time.
+    mastery_score: float = 0.0
+    """Long-term mastery score. Builds via qualifying keystrokes when
+    STABLE/MASTERED with rolling accuracy >= advancement_accuracy.
+    STABLE -> MASTERED at mastery_threshold (default 0.8)."""
+
+    mastery_qualifying_keystrokes: int = 0
+    """Lifetime total of qualifying keystrokes for this letter.
+    Informational — NOT used to compute mastery_score (the score is
+    tracked independently, pushed up by practice, pulled down by decay).
+    Freezes (does not reset) on degradation."""
+
     def _state_bonus(
         self,
         introducing: float = 3.0,
@@ -112,6 +135,8 @@ class LetterStats:
         New/struggling letters get more practice repetitions.
         Recently-stable letters get a decaying bonus to solidify
         the motor pattern before the letter is fully settled.
+        MASTERED letters get no state bonus (their reduced base weight
+        in training_weight() already reflects their status).
         """
         match self.state:
             case LetterState.INTRODUCING:
@@ -120,6 +145,8 @@ class LetterStats:
                 return degraded
             case LetterState.CONSOLIDATING:
                 return consolidating
+            case LetterState.MASTERED:
+                return 0.0
             case LetterState.STABLE:
                 if (
                     recently_stable_sessions > 0
@@ -196,16 +223,15 @@ class LetterStats:
         recently_stable_sessions: int = 10,
         volume_window: int = 200,
         volume_deficit: float = 1.0,
+        mastered: float = 0.5,
     ) -> float:
         """Need-based training weight for text generation.
 
-        Every letter gets equal base weight (1.0). Bonuses are added for
-        training need based on state (new/degraded letters need more reps),
-        accuracy gap (struggling letters need targeted practice),
-        recently-stable consolidation (letters that just became stable
-        need continued practice to solidify the motor pattern), and
-        volume deficit (letters that haven't yet filled their rolling
-        accuracy window need extra reps to produce reliable data).
+        Non-mastered letters get base weight 1.0; MASTERED letters get
+        ``mastered`` (default 0.5) to free share for non-mastered letters.
+        Bonuses are added for training need: state (new/degraded letters
+        need more reps), accuracy gap (struggling letters), recently-stable
+        consolidation, and volume deficit.
 
         Args:
             error_threshold: Error rate above which the accuracy-gap bonus
@@ -221,9 +247,11 @@ class LetterStats:
             volume_window: Rolling accuracy window size (keystrokes).
                 Letters with fewer keystrokes get a volume deficit bonus.
             volume_deficit: Maximum volume deficit bonus.
+            mastered: Base weight for MASTERED letters (replaces 1.0).
         """
+        base = mastered if self.state == LetterState.MASTERED else 1.0
         return (
-            1.0
+            base
             + self._state_bonus(
                 introducing,
                 degraded,

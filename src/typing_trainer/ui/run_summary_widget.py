@@ -91,9 +91,9 @@ class RunSummaryWidget(QWidget):
 
         self._letter_table = QTableWidget()
         self._letter_table.setFont(app_font(11))
-        self._letter_table.setColumnCount(4)
+        self._letter_table.setColumnCount(5)
         self._letter_table.setHorizontalHeaderLabels(
-            ["Letter", "Attempts", "Error Rate", "Avg RT (ms)"]
+            ["Letter", "Attempts", "Errors", "Error Rate", "Avg RT (ms)"]
         )
         header = self._letter_table.horizontalHeader()
         assert header is not None
@@ -177,6 +177,18 @@ class RunSummaryWidget(QWidget):
         lines.append(f"Accuracy:            {result.accuracy:.1%}")
         lines.append(f"WPM:                 {result.wpm:.1f}")
 
+        # Duration
+        if result.start_time is not None and result.end_time is not None:
+            duration_s = int(
+                (result.end_time - result.start_time).total_seconds()
+            )
+            if duration_s >= 60:
+                lines.append(
+                    f"Duration:            {duration_s // 60}m {duration_s % 60:02d}s"
+                )
+            else:
+                lines.append(f"Duration:            {duration_s}s")
+
         # Speed-specific stats
         if speed_result is not None:
             lines.append("")
@@ -225,19 +237,24 @@ class RunSummaryWidget(QWidget):
                 row, 1, QTableWidgetItem(str(stats.total_attempts))
             )
 
+            errors_item = QTableWidgetItem(str(stats.cognitive_errors))
+            if stats.cognitive_errors > 0:
+                errors_item.setForeground(QColor(COLOR_ERROR))
+            self._letter_table.setItem(row, 2, errors_item)
+
             error_item = QTableWidgetItem(f"{stats.error_rate:.1%}")
             if stats.error_rate > 0.08:
                 error_item.setForeground(QColor(COLOR_ERROR))
             elif stats.error_rate > 0.05:
                 error_item.setForeground(QColor(COLOR_WARNING))
-            self._letter_table.setItem(row, 2, error_item)
+            self._letter_table.setItem(row, 3, error_item)
 
             rt_text = (
                 f"{stats.mean_reaction_time_ms:.0f}"
                 if stats.mean_reaction_time_ms is not None
                 else "-"
             )
-            self._letter_table.setItem(row, 3, QTableWidgetItem(rt_text))
+            self._letter_table.setItem(row, 4, QTableWidgetItem(rt_text))
 
         # Start rest timer
         self._start_rest_timer()

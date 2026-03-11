@@ -187,6 +187,38 @@ class Config:
     keeping the middle 80%.  Resists outliers from pauses, distractions,
     or OS interrupts."""
 
+    # --- Mastery ---
+    mastery_keystrokes_required: int = 1500
+    """Total qualifying keystrokes for mastery_score delta of 1.0.
+
+    A "qualifying keystroke" is any scored keystroke (correct or cognitive
+    error, not motor overflow or burst repeat) for a letter that is in
+    STABLE or MASTERED state with rolling accuracy >= advancement_accuracy.
+    All modes (relearning, speed, transition) count equally.
+    At ~19 qualifying keystrokes per session: ~78 sessions to reach 1.0."""
+
+    mastery_threshold: float = 0.8
+    """mastery_score at which a STABLE letter transitions to MASTERED.
+
+    At 1500 required keystrokes this corresponds to ~1200 qualifying
+    keystrokes (~63 sessions of daily practice)."""
+
+    mastery_half_life_min_days: float = 14.0
+    """Mastery decay half-life (days) at mastery_score = 0.0.
+
+    Scales linearly with mastery_score up to mastery_half_life_max_days."""
+
+    mastery_half_life_max_days: float = 90.0
+    """Mastery decay half-life (days) at mastery_score = 1.0."""
+
+    weight_mastered: float = 0.5
+    """Base training weight for letters in MASTERED state.
+
+    Lower than the default 1.0 base, freeing up practice share for
+    non-mastered letters.  At 26 letters with 20 mastered (0.5) vs
+    5 stable (1.0) vs 1 introducing (4.0), the introducing letter
+    gets ~25% share instead of ~17%."""
+
     # --- Spaced repetition ---
     half_life_consolidating_hours: float = 24.0
     """Stability decay half-life for consolidating letters (hours)."""

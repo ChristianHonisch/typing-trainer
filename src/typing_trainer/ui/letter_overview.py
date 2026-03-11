@@ -26,7 +26,9 @@ from PyQt6.QtWidgets import (
 from typing_trainer.models.letter_state import LetterStats
 from typing_trainer.ui.theme import (
     COLOR_ERROR,
+    COLOR_MASTERED,
     COLOR_TEXT_BRIGHT,
+    COLOR_TEXT_MUTED,
     COLOR_WARNING,
     STATE_COLORS,
     app_font,
@@ -64,9 +66,9 @@ class LetterOverviewWidget(QWidget):
         # Table
         self._table = QTableWidget()
         self._table.setFont(app_font(11))
-        self._table.setColumnCount(6)
+        self._table.setColumnCount(7)
         self._table.setHorizontalHeaderLabels(
-            ["Letter", "State", "Last Err", "Rolling Err", "Stability", "Sessions"]
+            ["Letter", "State", "Last Err", "Rolling Err", "Stability", "Mastery", "Sessions"]
         )
         header = self._table.horizontalHeader()
         assert header is not None
@@ -77,10 +79,22 @@ class LetterOverviewWidget(QWidget):
         self._table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         layout.addWidget(self._table)
 
-    def update_display(self, active_letters: dict[str, LetterStats]) -> None:
-        """Refresh the table with current letter states."""
+    def update_display(
+        self,
+        active_letters: dict[str, LetterStats],
+        remaining_letters: list[str] | None = None,
+    ) -> None:
+        """Refresh the table with current letter states.
+
+        Args:
+            active_letters: Currently active (unlocked) letters with stats.
+            remaining_letters: Letters not yet introduced, in introduction
+                order.  Displayed as greyed-out "Locked" rows below the
+                active letters.
+        """
         letters = sorted(active_letters.keys())
-        self._table.setRowCount(len(letters))
+        locked = remaining_letters or []
+        self._table.setRowCount(len(letters) + len(locked))
 
         for row, letter in enumerate(letters):
             stats = active_letters[letter]
@@ -122,6 +136,33 @@ class LetterOverviewWidget(QWidget):
                 stability_item.setForeground(QColor(COLOR_ERROR))
             self._table.setItem(row, 4, stability_item)
 
+            # Mastery
+            mastery_item = QTableWidgetItem(f"{stats.mastery_score:.2f}")
+            if stats.mastery_score >= 0.8:
+                mastery_item.setForeground(QColor(COLOR_MASTERED))
+            self._table.setItem(row, 5, mastery_item)
+
             # Sessions since introduced
             sessions_item = QTableWidgetItem(str(stats.sessions_since_introduced))
-            self._table.setItem(row, 5, sessions_item)
+            self._table.setItem(row, 6, sessions_item)
+
+        # Locked (not yet introduced) letters — grey placeholder rows
+        muted = QColor(COLOR_TEXT_MUTED)
+        base_row = len(letters)
+        for i, letter in enumerate(locked):
+            row = base_row + i
+
+            item = QTableWidgetItem(letter.upper())
+            item.setForeground(muted)
+            item.setFont(app_font(12, bold=False))
+            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._table.setItem(row, 0, item)
+
+            locked_item = QTableWidgetItem("Locked")
+            locked_item.setForeground(muted)
+            self._table.setItem(row, 1, locked_item)
+
+            for col in range(2, 7):
+                dash = QTableWidgetItem("-")
+                dash.setForeground(muted)
+                self._table.setItem(row, col, dash)

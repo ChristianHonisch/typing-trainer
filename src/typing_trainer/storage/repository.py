@@ -7,6 +7,7 @@ touch sqlite directly.
 from __future__ import annotations
 
 import json
+import sqlite3
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
@@ -288,8 +289,9 @@ class Repository:
                (letter, state, stability_score, last_practiced,
                 error_rate_last_session, sessions_in_current_state,
                 sessions_since_introduced, accuracy_history,
-                keystrokes_at_introduction)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                keystrokes_at_introduction,
+                mastery_score, mastery_qualifying_keystrokes)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(letter) DO UPDATE SET
                 state = excluded.state,
                 stability_score = excluded.stability_score,
@@ -298,7 +300,9 @@ class Repository:
                 sessions_in_current_state = excluded.sessions_in_current_state,
                 sessions_since_introduced = excluded.sessions_since_introduced,
                 accuracy_history = excluded.accuracy_history,
-                keystrokes_at_introduction = excluded.keystrokes_at_introduction""",
+                keystrokes_at_introduction = excluded.keystrokes_at_introduction,
+                mastery_score = excluded.mastery_score,
+                mastery_qualifying_keystrokes = excluded.mastery_qualifying_keystrokes""",
             (
                 stats.letter,
                 stats.state.value,
@@ -309,6 +313,8 @@ class Repository:
                 stats.sessions_since_introduced,
                 json.dumps(stats.accuracy_history),
                 stats.keystrokes_at_introduction,
+                stats.mastery_score,
+                stats.mastery_qualifying_keystrokes,
             ),
         )
 
@@ -328,17 +334,7 @@ class Repository:
         rows = self.db.conn.execute("SELECT * FROM letter_states").fetchall()
         result: dict[str, LetterStats] = {}
         for row in rows:
-            result[row["letter"]] = LetterStats(
-                letter=row["letter"],
-                state=LetterState(row["state"]),
-                stability_score=row["stability_score"],
-                last_practiced=_str_to_dt(row["last_practiced"]),
-                error_rate_latest=row["error_rate_last_session"],
-                sessions_in_current_state=row["sessions_in_current_state"],
-                sessions_since_introduced=row["sessions_since_introduced"],
-                accuracy_history=json.loads(row["accuracy_history"]),
-                keystrokes_at_introduction=row["keystrokes_at_introduction"],
-            )
+            result[row["letter"]] = self._row_to_letter_stats(row)
         return result
 
     def get_letter_state(self, letter: str) -> LetterStats | None:
@@ -348,6 +344,11 @@ class Repository:
         ).fetchone()
         if row is None:
             return None
+        return self._row_to_letter_stats(row)
+
+    @staticmethod
+    def _row_to_letter_stats(row: sqlite3.Row) -> LetterStats:
+        """Convert a DB row to a LetterStats object."""
         return LetterStats(
             letter=row["letter"],
             state=LetterState(row["state"]),
@@ -358,6 +359,8 @@ class Repository:
             sessions_since_introduced=row["sessions_since_introduced"],
             accuracy_history=json.loads(row["accuracy_history"]),
             keystrokes_at_introduction=row["keystrokes_at_introduction"],
+            mastery_score=row["mastery_score"],
+            mastery_qualifying_keystrokes=row["mastery_qualifying_keystrokes"],
         )
 
     # ── Active Letter Order ───────────────────────────────────────────
@@ -1017,3 +1020,247 @@ class Repository:
         )
 
         return reclassified
+
+    # ── Mastery Bootstrap ─────────────────────────────────────────────
+
+    def bootstrap_mastery(
+        self,
+        mastery_keystrokes_required: int = 1500,
+        advancement_accuracy: float = 0.95,
+        mastery_threshold: float = 0.8,
+        mastery_half_life_min_days: float = 14.0,
+        mastery_half_life_max_days: float = 90.0,
+        accuracy_window: int = 200,
+    ) -> None:
+        """Compute mastery_score from session history for all letters.
+
+        Replays sessions chronologically, tracking per-letter rolling
+        accuracy and state to determine qualifying keystrokes at each
+        session boundary.  Applies mastery decay between sessions.
+
+        This is a one-time migration — called from v7 schema migration.
+        After this, ongoing mastery updates are handled incrementally
+        by ``LetterManager.update_states_after_session()``.
+        """
+        import math
+
+        # Load all sessions in chronological order with their runs
+        sessions = self.db.conn.execute(
+            "SELECT id, start_time, end_time FROM sessions ORDER BY id"
+        ).fetchall()
+
+        if not sessions:
+            return
+
+        # Load the current letter states to know which letters exist
+        # and what their current state/stability/history is.
+        # We only need to compute mastery — states are already correct.
+        letter_states = self.get_all_letter_states()
+
+        if not letter_states:
+            return
+
+        # Determine when each letter was first introduced by finding
+        # the earliest session where it appears in keystrokes.
+        letter_first_session: dict[str, int] = {}
+        for letter in letter_states:
+            row = self.db.conn.execute(
+                """SELECT MIN(r.session_id) AS first_sid
+                   FROM keystrokes k
+                   JOIN runs r ON k.run_id = r.id
+                   WHERE k.expected_char = ?
+                     AND k.is_backspace = 0""",
+                (letter,),
+            ).fetchone()
+            if row is not None and row["first_sid"] is not None:
+                letter_first_session[letter] = row["first_sid"]
+
+        # For each letter, build a rolling accuracy buffer and track
+        # when it became STABLE.  We use a simplified heuristic:
+        # a letter is "stable-like" once it has accumulated enough
+        # keystrokes AND its rolling accuracy has been >= threshold
+        # for a sustained period.
+        #
+        # Precise replay of the full state machine is complex (depends
+        # on stability_score, sessions_in_current_state, accuracy_history,
+        # etc.).  Instead we use a conservative approximation:
+        #
+        #   A letter qualifies for mastery in a session if:
+        #   1. It has been active for >= 5 sessions (covers introducing +
+        #      consolidating transition minimum)
+        #   2. Its rolling accuracy (last `accuracy_window` keystrokes up
+        #      to this session) is >= advancement_accuracy
+        #
+        # This slightly underestimates mastery for letters that became
+        # stable very quickly, and slightly overestimates for edge cases
+        # where a letter was degraded.  Since mastery builds slowly
+        # (~0.013 per session), the error is small.
+        MIN_SESSIONS_FOR_QUALIFYING = 5
+
+        # Collect per-letter, per-session keystroke data
+        # Structure: {letter: [(session_id, session_end_time, keystrokes_count)]}
+        letter_session_data: dict[str, list[tuple[int, str | None, int]]] = {
+            letter: [] for letter in letter_states
+        }
+
+        for session in sessions:
+            sid = session["id"]
+            end_time = session["end_time"]
+            # Count scored keystrokes per letter in this session
+            rows = self.db.conn.execute(
+                """SELECT expected_char, COUNT(*) AS cnt
+                   FROM keystrokes k
+                   JOIN runs r ON k.run_id = r.id
+                   WHERE r.session_id = ?
+                     AND k.error_type IN ('correct', 'cognitive_error')
+                     AND k.is_backspace = 0
+                   GROUP BY expected_char""",
+                (sid,),
+            ).fetchall()
+            for row in rows:
+                letter = row["expected_char"]
+                if letter in letter_session_data:
+                    letter_session_data[letter].append(
+                        (sid, end_time, row["cnt"])
+                    )
+
+        # Build rolling accuracy buffers per letter and compute mastery
+        for letter, stats in letter_states.items():
+            first_sid = letter_first_session.get(letter)
+            if first_sid is None:
+                continue
+
+            # Collect all scored keystrokes for rolling accuracy computation
+            all_keystrokes = self.db.conn.execute(
+                """SELECT k.error_type, r.session_id
+                   FROM keystrokes k
+                   JOIN runs r ON k.run_id = r.id
+                   WHERE k.expected_char = ?
+                     AND k.error_type IN ('correct', 'cognitive_error')
+                     AND k.is_backspace = 0
+                   ORDER BY k.id""",
+                (letter,),
+            ).fetchall()
+
+            # Group keystrokes by session and compute rolling accuracy
+            # at each session boundary
+            session_boundaries: list[tuple[int, float, int]] = []
+            buf: deque[bool] = deque()  # True = correct
+            errors_in_buf = 0
+            current_sid: int | None = None
+            session_ks_count = 0
+
+            for ks in all_keystrokes:
+                sid = ks["session_id"]
+                is_correct = ks["error_type"] == "correct"
+
+                if sid != current_sid:
+                    # Emit the previous session boundary
+                    if current_sid is not None and len(buf) > 0:
+                        acc = (len(buf) - errors_in_buf) / len(buf)
+                        session_boundaries.append(
+                            (current_sid, acc, session_ks_count)
+                        )
+                    current_sid = sid
+                    session_ks_count = 0
+
+                buf.append(is_correct)
+                if not is_correct:
+                    errors_in_buf += 1
+                session_ks_count += 1
+
+                while len(buf) > accuracy_window:
+                    old = buf.popleft()
+                    if not old:
+                        errors_in_buf -= 1
+
+            # Emit last session boundary
+            if current_sid is not None and len(buf) > 0:
+                acc = (len(buf) - errors_in_buf) / len(buf)
+                session_boundaries.append(
+                    (current_sid, acc, session_ks_count)
+                )
+
+            # Now compute mastery by walking session boundaries
+            mastery_score = 0.0
+            qualifying_total = 0
+            sessions_active = 0
+            prev_end_time: datetime | None = None
+
+            # Build a session_id -> end_time lookup
+            session_end_times: dict[int, str | None] = {
+                s["id"]: s["end_time"] for s in sessions
+            }
+
+            for sid, rolling_acc, ks_count in session_boundaries:
+                sessions_active += 1
+                end_time_str = session_end_times.get(sid)
+                current_end = _str_to_dt(end_time_str) if end_time_str else None
+
+                # Apply mastery decay since previous session
+                if prev_end_time is not None and current_end is not None:
+                    hours_elapsed = (
+                        current_end - prev_end_time
+                    ).total_seconds() / 3600.0
+                    if hours_elapsed > 0 and mastery_score > 0:
+                        half_life_days = (
+                            mastery_half_life_min_days
+                            + mastery_score
+                            * (
+                                mastery_half_life_max_days
+                                - mastery_half_life_min_days
+                            )
+                        )
+                        half_life_hours = half_life_days * 24.0
+                        decay_constant = math.log(2) / half_life_hours
+                        mastery_score *= math.exp(
+                            -decay_constant * hours_elapsed
+                        )
+
+                # Check qualifying condition
+                if (
+                    sessions_active >= MIN_SESSIONS_FOR_QUALIFYING
+                    and rolling_acc >= advancement_accuracy
+                ):
+                    delta = ks_count / mastery_keystrokes_required
+                    mastery_score = min(1.0, mastery_score + delta)
+                    qualifying_total += ks_count
+
+                if current_end is not None:
+                    prev_end_time = current_end
+
+            # Apply final decay from last session to now
+            if prev_end_time is not None and mastery_score > 0:
+                from datetime import datetime as _dt
+
+                hours_since = (
+                    _dt.now() - prev_end_time
+                ).total_seconds() / 3600.0
+                if hours_since > 0:
+                    half_life_days = (
+                        mastery_half_life_min_days
+                        + mastery_score
+                        * (
+                            mastery_half_life_max_days
+                            - mastery_half_life_min_days
+                        )
+                    )
+                    half_life_hours = half_life_days * 24.0
+                    decay_constant = math.log(2) / half_life_hours
+                    mastery_score *= math.exp(
+                        -decay_constant * hours_since
+                    )
+
+            # Update the letter state
+            stats.mastery_score = mastery_score
+            stats.mastery_qualifying_keystrokes = qualifying_total
+
+            # Check if it should be MASTERED
+            if (
+                stats.state == LetterState.STABLE
+                and mastery_score >= mastery_threshold
+            ):
+                stats.state = LetterState.MASTERED
+                stats.sessions_in_current_state = 0
+
+            self._upsert_letter_state(stats)
