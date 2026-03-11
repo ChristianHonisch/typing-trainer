@@ -1,0 +1,29 @@
+[project]
+name = "typing-trainer"
+version = "0.1.0"
+description = "A typing trainer built on motor learning principles"
+readme = "README.md"
+authors = [
+    { name = "Christian Badea-Honisch", email = "christian.ho@gmx.de" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "PyQt6>=6.7",
+    "pyqtgraph>=0.13",
+]
+
+[project.scripts]
+typing-trainer = "typing_trainer.main:main"
+
+[build-system]
+requires = ["uv_build>=0.10.9,<0.11.0"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
