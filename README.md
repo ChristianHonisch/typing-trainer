@@ -2,7 +2,7 @@
 
 A desktop typing trainer built on motor learning principles. No gamification, no badges, no streaks — just systematic training to build correct finger-to-key motor patterns, consolidate them to automaticity, then push for speed.
 
-<!-- TODO: Add screenshot -->
+![Training screen](docs/screenshots/training_screen.png)
 
 ## Philosophy
 
