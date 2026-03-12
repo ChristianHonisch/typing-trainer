@@ -219,6 +219,32 @@ class LetterManager:
         )
         return active_letters
 
+    def recheck_all_states(
+        self,
+        active_letters: dict[str, LetterStats],
+    ) -> bool:
+        """Recheck letter states based on current rolling error rates.
+
+        This is a lightweight per-run state recheck.  It runs the same
+        state machine as ``update_states_after_session`` but does NOT
+        modify session counters, accuracy history, mastery, or stability
+        score — those remain session-boundary-only operations.
+
+        Requires ``rolling_error_rate`` to be populated on each
+        :class:`LetterStats` before calling (done by
+        ``_refresh_dashboard`` from DB data).
+
+        Returns ``True`` if any state changed (caller should persist).
+        """
+        changed = False
+        for stats in active_letters.values():
+            new_state = self._compute_new_state(stats)
+            if new_state != stats.state:
+                stats.sessions_in_current_state = 0
+                stats.state = new_state
+                changed = True
+        return changed
+
     def update_states_after_session(
         self,
         active_letters: dict[str, LetterStats],

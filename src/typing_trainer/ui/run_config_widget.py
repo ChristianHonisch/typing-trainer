@@ -2,8 +2,9 @@
 
 Allows the user to set:
 - Run length (number of keystrokes)
-- Mode (relearning / speed)
-- Practice type (random_strings / random_words / sentences)
+- Mode (relearning / speed / transition)
+- Practice type (random_strings / random_words / sentences / bigram_words)
+- Which active letters to include in the run
 
 Also shows the active letter set and any review alerts.
 """
@@ -24,9 +25,13 @@ from PyQt6.QtWidgets import (
 )
 
 from typing_trainer.config import Config
-from typing_trainer.models.letter_state import LetterStats, PracticeType, RunMode
+from typing_trainer.models.letter_state import LetterState, LetterStats, PracticeType, RunMode
 from typing_trainer.ui.theme import (
     COLOR_ALERT,
+    COLOR_BG_SECONDARY,
+    COLOR_BG_TERTIARY,
+    COLOR_BTN_DISABLED_BG,
+    COLOR_BTN_DISABLED_TEXT,
     COLOR_BTN_HOVER,
     COLOR_BTN_PRESSED,
     COLOR_BTN_PRIMARY,
@@ -37,6 +42,8 @@ from typing_trainer.ui.theme import (
     app_font,
     make_selectable,
 )
+
+_STABLE_STATES = frozenset({LetterState.STABLE, LetterState.MASTERED})
 
 
 class RunConfigWidget(QWidget):
@@ -55,6 +62,10 @@ class RunConfigWidget(QWidget):
         self._speed_available = False
         self._transition_available = False
         self._selected_bigrams: list[tuple[str, str]] = []
+
+        # Letter selection state
+        self._selected_letters: set[str] = set()
+        self._letter_buttons: dict[str, QPushButton] = {}
 
         # Rest timer state
         self._rest_remaining = 0
@@ -77,15 +88,23 @@ class RunConfigWidget(QWidget):
 
         layout.addSpacing(10)
 
-        # Letter set display
+        # Letter set display + selection toggles
         self._letter_group = QGroupBox("Active Letters")
         self._letter_group.setFont(app_font(11))
         letter_layout = QVBoxLayout(self._letter_group)
+
         self._letter_display = QLabel("")
         self._letter_display.setFont(app_font(14))
         self._letter_display.setWordWrap(True)
         make_selectable(self._letter_display)
         letter_layout.addWidget(self._letter_display)
+
+        # Letter toggle buttons row
+        self._toggle_row = QHBoxLayout()
+        self._toggle_row.setSpacing(4)
+        self._toggle_row.addStretch()  # trailing stretch
+        letter_layout.addLayout(self._toggle_row)
+
         layout.addWidget(self._letter_group)
 
         # Alerts
@@ -198,25 +217,28 @@ class RunConfigWidget(QWidget):
 
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
+    # ------------------------------------------------------------------
+    # Letter display and selection
+    # ------------------------------------------------------------------
+
     def update_letter_display(
         self,
         active_letters: dict[str, LetterStats],
         speed_available: bool = False,
         transition_available: bool = False,
     ) -> None:
-        """Update the letter set display."""
+        """Update the letter set display and rebuild toggle buttons."""
         self._active_letters = active_letters
         self._speed_available = speed_available
         self._transition_available = transition_available
 
         if not active_letters:
             self._letter_display.setText("No letters active")
+            self._rebuild_letter_toggles()
             return
 
-        # Group by state and color-code
+        # Color-coded letter overview
         parts: list[str] = []
-
-        # Sort letters by introduction order
         for letter in sorted(active_letters.keys()):
             stats = active_letters[letter]
             color = STATE_COLORS.get(stats.state, COLOR_TEXT_BRIGHT)
@@ -228,8 +250,137 @@ class RunConfigWidget(QWidget):
             + "</span>"
         )
 
+        self._rebuild_letter_toggles()
         self._update_mode_warning()
         self._update_practice_types()
+
+    def _rebuild_letter_toggles(self) -> None:
+        """Rebuild the letter toggle buttons to match current active letters.
+
+        Preserves the current selection where possible (only removes letters
+        that are no longer active).  Does NOT reset the selection to the
+        mode default — that only happens on explicit mode change.
+        """
+        # Remove old buttons
+        for btn in self._letter_buttons.values():
+            self._toggle_row.removeWidget(btn)
+            btn.deleteLater()
+        self._letter_buttons.clear()
+
+        # Prune selection: drop letters no longer active
+        self._selected_letters &= set(self._active_letters.keys())
+
+        # If selection is now empty (e.g. first call), apply mode default
+        if not self._selected_letters and self._active_letters:
+            self._apply_default_selection()
+
+        # Build buttons in sorted order
+        for letter in sorted(self._active_letters.keys()):
+            btn = QPushButton(letter)
+            btn.setFont(app_font(12, bold=True))
+            btn.setFixedSize(32, 32)
+            btn.setCheckable(True)
+            btn.setChecked(letter in self._selected_letters)
+            btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            btn.clicked.connect(lambda checked, l=letter: self._on_letter_toggled(l, checked))
+            self._letter_buttons[letter] = btn
+            # Insert before the trailing stretch
+            self._toggle_row.insertWidget(
+                self._toggle_row.count() - 1, btn
+            )
+
+        self._update_toggle_styles()
+        self._update_start_button()
+
+    def _apply_default_selection(self) -> None:
+        """Set the letter selection to the mode-appropriate default.
+
+        - Relearning: all active letters
+        - Speed / Transition: only STABLE + MASTERED letters
+        """
+        mode = self._mode_combo.currentData()
+        if mode in (RunMode.SPEED, RunMode.TRANSITION):
+            self._selected_letters = {
+                letter
+                for letter, stats in self._active_letters.items()
+                if stats.state in _STABLE_STATES
+            }
+        else:
+            self._selected_letters = set(self._active_letters.keys())
+
+        # Sync button checked state
+        for letter, btn in self._letter_buttons.items():
+            btn.blockSignals(True)
+            btn.setChecked(letter in self._selected_letters)
+            btn.blockSignals(False)
+
+        self._update_toggle_styles()
+        self._update_start_button()
+
+    def _on_letter_toggled(self, letter: str, checked: bool) -> None:
+        """Handle a letter toggle button click."""
+        if checked:
+            self._selected_letters.add(letter)
+        else:
+            self._selected_letters.discard(letter)
+        self._update_toggle_styles()
+        self._update_start_button()
+
+    def _update_toggle_styles(self) -> None:
+        """Update visual styling of toggle buttons based on selection."""
+        for letter, btn in self._letter_buttons.items():
+            stats = self._active_letters.get(letter)
+            if stats is None:
+                continue
+            color = STATE_COLORS.get(stats.state, COLOR_TEXT_BRIGHT)
+            if letter in self._selected_letters:
+                btn.setStyleSheet(
+                    f"""
+                    QPushButton {{
+                        background-color: {COLOR_BG_SECONDARY};
+                        color: {color};
+                        border: 2px solid {color};
+                        border-radius: 4px;
+                    }}
+                    QPushButton:hover {{
+                        background-color: {COLOR_BG_TERTIARY};
+                    }}
+                    """
+                )
+            else:
+                btn.setStyleSheet(
+                    f"""
+                    QPushButton {{
+                        background-color: {COLOR_BTN_DISABLED_BG};
+                        color: {COLOR_BTN_DISABLED_TEXT};
+                        border: 2px solid {COLOR_BG_TERTIARY};
+                        border-radius: 4px;
+                    }}
+                    QPushButton:hover {{
+                        background-color: {COLOR_BG_TERTIARY};
+                        color: {color};
+                    }}
+                    """
+                )
+
+    def _update_start_button(self) -> None:
+        """Enable/disable the start button based on letter selection."""
+        self._start_btn.setEnabled(len(self._selected_letters) > 0)
+
+    def get_selected_letters(self) -> dict[str, LetterStats]:
+        """Get the currently selected letters with their stats.
+
+        Returns a subset of active_letters filtered to only selected ones.
+        """
+        return {
+            letter: stats
+            for letter, stats in self._active_letters.items()
+            if letter in self._selected_letters
+        }
+
+    # ------------------------------------------------------------------
+    # Alerts, mode, practice type
+    # ------------------------------------------------------------------
 
     def set_alerts(self, alerts: list[str]) -> None:
         """Show alerts (e.g., review due, degradation warnings)."""
@@ -250,6 +401,9 @@ class RunConfigWidget(QWidget):
             self._length_spin.setValue(self.config.run_length_default_transition)
         else:
             self._length_spin.setValue(self.config.run_length_default_relearning)
+
+        # Reset letter selection to mode default
+        self._apply_default_selection()
 
     def _update_mode_warning(self) -> None:
         """Show or hide warning when speed/transition conditions aren't met."""
@@ -304,6 +458,10 @@ class RunConfigWidget(QWidget):
 
         # Show/hide bigram selection info
         self._update_bigram_display()
+
+    # ------------------------------------------------------------------
+    # Keyboard, bigrams, rest timer
+    # ------------------------------------------------------------------
 
     def keyPressEvent(self, event: QKeyEvent) -> None:  # type: ignore[override]
         """Allow starting a run by pressing Return/Enter."""
@@ -375,6 +533,8 @@ class RunConfigWidget(QWidget):
             self._rest_label.setStyleSheet(f"color: {COLOR_SUCCESS};")
 
     def _on_start(self) -> None:
+        if not self._selected_letters:
+            return
         self._rest_timer.stop()
         self._rest_label.hide()
         length = self._length_spin.value()

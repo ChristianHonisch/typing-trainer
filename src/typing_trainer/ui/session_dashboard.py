@@ -83,10 +83,38 @@ class SessionDashboard(QWidget):
 
         layout.addStretch()
 
-    def update_session_info(self, session: Session | None) -> None:
-        """Update the session info display."""
+    @staticmethod
+    def _format_duration(seconds: int) -> str:
+        """Format a duration in seconds as ``Xm Ys`` or ``Xs``."""
+        if seconds >= 60:
+            return f"{seconds // 60}m {seconds % 60:02d}s"
+        return f"{seconds}s"
+
+    def update_session_info(
+        self,
+        session: Session | None,
+        session_active_s: int = 0,
+        session_elapsed_s: int = 0,
+        today_s: int = 0,
+    ) -> None:
+        """Update the session info display.
+
+        Args:
+            session: The current session (or None).
+            session_active_s: Active typing time this session (sum of
+                run durations), in seconds.
+            session_elapsed_s: Wall-clock time since session start, in
+                seconds.
+            today_s: Total active typing time today (all sessions), in
+                seconds.
+        """
         if session is None:
-            self._session_label.setText("No active session")
+            if today_s > 0:
+                self._session_label.setText(
+                    f"No active session\nToday: {self._format_duration(today_s)}"
+                )
+            else:
+                self._session_label.setText("No active session")
             return
 
         lines: list[str] = []
@@ -94,6 +122,10 @@ class SessionDashboard(QWidget):
         lines.append(f"Keystrokes: {session.total_cognitive_keystrokes}")
         if session.run_count > 0:
             lines.append(f"Accuracy: {session.aggregate_accuracy:.1%}")
+        active = self._format_duration(session_active_s)
+        elapsed = self._format_duration(session_elapsed_s)
+        lines.append(f"Active: {active} (elapsed: {elapsed})")
+        lines.append(f"Today: {self._format_duration(today_s)}")
 
         self._session_label.setText("\n".join(lines))
 

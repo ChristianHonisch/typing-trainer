@@ -24,7 +24,7 @@ class TestConfigDefaults:
         assert config.speed_increment == 2
         assert config.speed_decrement == 4
         assert config.session_timeout_minutes == 30
-        assert config.rest_suggestion_seconds == 30
+        assert config.rest_suggestion_seconds == 10
         assert config.degraded_recovery_margin == 0.8
         assert config.max_letter_share == 0.35
         assert config.warmup_keystrokes == 3

@@ -166,7 +166,7 @@ User sets before each run:
 
 ### Rest Between Runs
 
-After each run, a 30-second rest countdown is shown. The user can skip it at any time (the Continue button is always enabled). Rest is advisory, not enforced.
+After each run, a 10-second rest countdown is shown. The user can skip it at any time (the Continue button is always enabled). Rest is advisory, not enforced. See `scientific-basis.md` for the evidence behind this duration.
 
 ### Practice Types
 
@@ -493,7 +493,7 @@ All thresholds are user-configurable via JSON file. Missing keys use defaults.
 | Parameter | Default | Description |
 |---|---|---|
 | `session_timeout_minutes` | 30 | Inactivity timeout for session boundary |
-| `rest_suggestion_seconds` | 30 | Suggested rest between runs |
+| `rest_suggestion_seconds` | 10 | Suggested rest between runs |
 
 ### Degradation
 

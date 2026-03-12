@@ -2,13 +2,19 @@
 
 Shows:
 - Aggregate stats (keystrokes, accuracy, WPM, errors)
+- Intra-run typing speed chart (rolling RT over position)
 - Per-letter error rates
 - Per-letter mean reaction times
 - Delta vs previous run
-- 30-second rest suggestion countdown
+- Rest suggestion countdown
 """
 
 from __future__ import annotations
+
+from collections import deque
+
+import numpy as np
+import pyqtgraph as pg
 
 from PyQt6.QtCore import QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QKeyEvent
@@ -18,6 +24,7 @@ from PyQt6.QtWidgets import (
     QHeaderView,
     QLabel,
     QPushButton,
+    QSpinBox,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -26,8 +33,11 @@ from PyQt6.QtWidgets import (
 
 from typing_trainer.config import Config
 from typing_trainer.core.speed_manager import SpeedRunResult
+from typing_trainer.core.stats import RT_CAP_MS
+from typing_trainer.models.letter_state import ErrorType
 from typing_trainer.models.run_result import RunResult
 from typing_trainer.ui.theme import (
+    COLOR_BG_DARK,
     COLOR_BTN_DISABLED_BG,
     COLOR_BTN_DISABLED_TEXT,
     COLOR_BTN_HOVER,
@@ -35,11 +45,15 @@ from typing_trainer.ui.theme import (
     COLOR_ERROR,
     COLOR_SUCCESS,
     COLOR_TEXT_BRIGHT,
+    COLOR_TEXT_PRIMARY,
     COLOR_TEXT_SECONDARY,
     COLOR_WARNING,
     app_font,
     make_selectable,
 )
+
+_RT_WINDOW = 10
+"""Rolling window size for the intra-run speed chart."""
 
 
 class RunSummaryWidget(QWidget):
@@ -59,6 +73,11 @@ class RunSummaryWidget(QWidget):
         self._rest_timer = QTimer(self)
         self._rest_timer.setInterval(1000)
         self._rest_timer.timeout.connect(self._on_rest_tick)
+
+        # State for chart re-draw on window change
+        self._last_result: RunResult | None = None
+        self._last_speed_result: SpeedRunResult | None = None
+        self._last_settled: set[str] | None = None
 
         self._setup_ui()
 
@@ -83,6 +102,45 @@ class RunSummaryWidget(QWidget):
         make_selectable(self._stats_label)
         stats_layout.addWidget(self._stats_label)
         layout.addWidget(stats_group)
+
+        # Intra-run speed chart
+        speed_group = QGroupBox("Typing Speed")
+        speed_group.setFont(app_font(11))
+        speed_layout = QVBoxLayout(speed_group)
+        speed_layout.setContentsMargins(4, 4, 4, 4)
+
+        # Window spinner above chart
+        speed_controls = QHBoxLayout()
+        speed_controls.setSpacing(8)
+        win_label = QLabel("Window:")
+        win_label.setFont(app_font(9))
+        speed_controls.addWidget(win_label)
+        self._rt_window_spin = QSpinBox()
+        self._rt_window_spin.setFont(app_font(9))
+        self._rt_window_spin.setRange(3, 50)
+        self._rt_window_spin.setSingleStep(1)
+        self._rt_window_spin.setValue(_RT_WINDOW)
+        self._rt_window_spin.valueChanged.connect(self._on_rt_window_changed)
+        speed_controls.addWidget(self._rt_window_spin)
+        speed_controls.addStretch()
+        speed_layout.addLayout(speed_controls)
+
+        self._speed_chart = pg.PlotWidget()
+        self._speed_chart.setBackground(COLOR_BG_DARK)
+        self._speed_chart.showGrid(x=True, y=True, alpha=0.15)
+        self._speed_chart.setLabel(
+            "left", "RT (ms)", color=COLOR_TEXT_PRIMARY
+        )
+        self._speed_chart.setLabel(
+            "bottom", "Position", color=COLOR_TEXT_PRIMARY
+        )
+        self._speed_chart.getAxis("left").setTextPen(COLOR_TEXT_SECONDARY)
+        self._speed_chart.getAxis("bottom").setTextPen(COLOR_TEXT_SECONDARY)
+        self._speed_chart.setMinimumHeight(150)
+
+        speed_layout.addWidget(self._speed_chart, stretch=1)
+        self._speed_group = speed_group
+        layout.addWidget(speed_group, stretch=1)
 
         # Per-letter table
         letter_group = QGroupBox("Per-Letter Breakdown")
@@ -151,6 +209,7 @@ class RunSummaryWidget(QWidget):
         result: RunResult,
         previous: RunResult | None = None,
         speed_result: SpeedRunResult | None = None,
+        settled_letters: set[str] | None = None,
     ) -> None:
         """Display the run result."""
         # Title
@@ -226,6 +285,12 @@ class RunSummaryWidget(QWidget):
 
         self._stats_label.setText("<pre>" + "\n".join(lines) + "</pre>")
 
+        # Intra-run speed chart (store for re-draw on window change)
+        self._last_result = result
+        self._last_speed_result = speed_result
+        self._last_settled = settled_letters
+        self._update_speed_chart(result, speed_result, settled_letters)
+
         # Per-letter table
         letters = sorted(result.per_letter.keys())
         self._letter_table.setRowCount(len(letters))
@@ -261,6 +326,165 @@ class RunSummaryWidget(QWidget):
 
         # Grab focus so Return key works immediately
         self.setFocus()
+
+    def _update_speed_chart(
+        self,
+        result: RunResult,
+        speed_result: SpeedRunResult | None,
+        settled_letters: set[str] | None = None,
+    ) -> None:
+        """Plot rolling reaction time over keystroke position.
+
+        Three lines:
+        - **Green** ("All"): all valid keystrokes.
+        - **Blue** ("Settled"): only keystrokes for *settled_letters*
+          (letters with >= 2000 historical keystrokes, best third by
+          accuracy).
+        - **Cyan** ("Space"): spacebar keystrokes only.
+
+        Red scatter dots mark positions with cognitive errors (on the
+        "All" line).  In speed mode a dashed horizontal line shows the
+        target RT.
+        """
+        self._speed_chart.clear()
+        warmup = self.config.warmup_keystrokes
+        settled = settled_letters or set()
+
+        # ── Collect keystrokes into three parallel streams ──
+        all_pos: list[int] = []
+        all_rt: list[float] = []
+        settled_pos: list[int] = []
+        settled_rt: list[float] = []
+        space_pos: list[int] = []
+        space_rt: list[float] = []
+        error_set: set[int] = set()
+
+        for ks in result.keystrokes:
+            if ks.is_backspace:
+                continue
+            if ks.position < warmup:
+                continue
+            if ks.error_type in (ErrorType.MOTOR_OVERFLOW, ErrorType.BURST_REPEAT):
+                continue
+            if ks.reaction_time_ms is None or ks.reaction_time_ms > RT_CAP_MS:
+                continue
+
+            rt = float(ks.reaction_time_ms)
+            pos = ks.position
+
+            all_pos.append(pos)
+            all_rt.append(rt)
+
+            if ks.expected_char in settled:
+                settled_pos.append(pos)
+                settled_rt.append(rt)
+
+            if ks.expected_char == " ":
+                space_pos.append(pos)
+                space_rt.append(rt)
+
+            if ks.error_type == ErrorType.COGNITIVE_ERROR:
+                error_set.add(pos)
+
+        if len(all_rt) < 2:
+            self._speed_group.hide()
+            return
+        self._speed_group.show()
+
+        # ── Helper: compute rolling mean from a stream ──
+        window = self._rt_window_spin.value()
+
+        def rolling(
+            positions: list[int], rts: list[float]
+        ) -> tuple[np.ndarray, np.ndarray]:
+            buf: deque[float] = deque(maxlen=window)
+            xs: list[int] = []
+            ys: list[float] = []
+            for p, r in zip(positions, rts):
+                buf.append(r)
+                xs.append(p)
+                ys.append(sum(buf) / len(buf))
+            return (
+                np.array(xs, dtype=np.float64),
+                np.array(ys, dtype=np.float64),
+            )
+
+        # ── Legend ──
+        legend = self._speed_chart.addLegend(
+            offset=(-10, 10), labelTextSize="9pt"
+        )
+        legend.setBrush(pg.mkBrush(30, 30, 30, 180))
+
+        y_max = 0.0
+
+        # ── Green: all keystrokes ──
+        x_all, y_all = rolling(all_pos, all_rt)
+        self._speed_chart.plot(
+            x_all, y_all, pen=pg.mkPen(COLOR_SUCCESS, width=2), name="All"
+        )
+        y_max = max(y_max, float(y_all.max()))
+
+        # ── Blue: settled letters ──
+        if len(settled_rt) >= 2:
+            x_set, y_set = rolling(settled_pos, settled_rt)
+            self._speed_chart.plot(
+                x_set, y_set, pen=pg.mkPen("#44aaff", width=2), name="Settled"
+            )
+            y_max = max(y_max, float(y_set.max()))
+
+        # ── Cyan: spacebar ──
+        if len(space_rt) >= 2:
+            x_sp, y_sp = rolling(space_pos, space_rt)
+            self._speed_chart.plot(
+                x_sp, y_sp, pen=pg.mkPen("#44cccc", width=2), name="Space"
+            )
+            y_max = max(y_max, float(y_sp.max()))
+
+        # ── Error markers (red dots on the "All" line) ──
+        err_x: list[int] = []
+        err_y: list[float] = []
+        for xi, yi in zip(x_all.tolist(), y_all.tolist()):
+            if int(xi) in error_set:
+                err_x.append(int(xi))
+                err_y.append(float(yi))
+
+        if err_x:
+            self._speed_chart.plot(
+                np.array(err_x, dtype=np.float64),
+                np.array(err_y, dtype=np.float64),
+                pen=None,
+                symbol="o",
+                symbolSize=7,
+                symbolBrush=COLOR_ERROR,
+                symbolPen=None,
+            )
+
+        # ── Target RT line (speed mode) ──
+        if speed_result is not None and speed_result.target_wpm > 0:
+            target_rt = 12000.0 / speed_result.target_wpm
+            self._speed_chart.addLine(
+                y=target_rt,
+                pen=pg.mkPen(
+                    COLOR_TEXT_SECONDARY,
+                    width=1,
+                    style=Qt.PenStyle.DashLine,
+                ),
+            )
+
+        # ── Y range ──
+        if y_max > 0:
+            self._speed_chart.getViewBox().setYRange(
+                0, y_max * 1.15, padding=0
+            )
+
+    def _on_rt_window_changed(self) -> None:
+        """Redraw the speed chart with the new rolling window size."""
+        if self._last_result is not None:
+            self._update_speed_chart(
+                self._last_result,
+                self._last_speed_result,
+                self._last_settled,
+            )
 
     def _start_rest_timer(self) -> None:
         self._rest_remaining = self._rest_seconds

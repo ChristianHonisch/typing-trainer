@@ -541,3 +541,125 @@ class TestFailThreshold:
 
         threshold = manager.get_fail_threshold(active, RunMode.RELEARNING)
         assert threshold == 0.80
+
+
+class TestRecheckAllStates:
+    """Tests for LetterManager.recheck_all_states()."""
+
+    def test_no_change_returns_false(self):
+        """No state changes → returns False."""
+        manager = LetterManager(Config())
+        active = {
+            "e": LetterStats(
+                letter="e",
+                state=LetterState.STABLE,
+                rolling_error_rate=0.02,
+                sessions_since_introduced=5,
+                accuracy_history=[0.98, 0.97, 0.96],
+            ),
+        }
+        assert manager.recheck_all_states(active) is False
+        assert active["e"].state == LetterState.STABLE
+
+    def test_stable_degrades_on_high_error(self):
+        """STABLE → DEGRADED when rolling_error_rate > 5%."""
+        manager = LetterManager(Config())
+        active = {
+            "e": LetterStats(
+                letter="e",
+                state=LetterState.STABLE,
+                rolling_error_rate=0.08,
+                sessions_since_introduced=5,
+                sessions_in_current_state=3,
+                accuracy_history=[0.98, 0.97, 0.96],
+            ),
+        }
+        assert manager.recheck_all_states(active) is True
+        assert active["e"].state == LetterState.DEGRADED
+        assert active["e"].sessions_in_current_state == 0
+
+    def test_mastered_degrades_on_high_error(self):
+        """MASTERED → DEGRADED when rolling_error_rate > 5%."""
+        manager = LetterManager(Config())
+        active = {
+            "e": LetterStats(
+                letter="e",
+                state=LetterState.MASTERED,
+                rolling_error_rate=0.06,
+                mastery_score=0.9,
+                sessions_since_introduced=50,
+                sessions_in_current_state=10,
+                accuracy_history=[0.98] * 5,
+            ),
+        }
+        assert manager.recheck_all_states(active) is True
+        assert active["e"].state == LetterState.DEGRADED
+
+    def test_degraded_recovers_to_stable(self):
+        """DEGRADED → STABLE when rolling_error_rate <= recovery threshold."""
+        config = Config(advancement_accuracy=0.95, degraded_recovery_margin=0.8)
+        manager = LetterManager(config)
+        # Recovery threshold = 0.05 * 0.8 = 0.04
+        active = {
+            "e": LetterStats(
+                letter="e",
+                state=LetterState.DEGRADED,
+                rolling_error_rate=0.03,
+                sessions_since_introduced=5,
+                sessions_in_current_state=2,
+            ),
+        }
+        assert manager.recheck_all_states(active) is True
+        assert active["e"].state == LetterState.STABLE
+
+    def test_degraded_stays_if_not_recovered(self):
+        """DEGRADED stays DEGRADED if error rate still above recovery threshold."""
+        config = Config(advancement_accuracy=0.95, degraded_recovery_margin=0.8)
+        manager = LetterManager(config)
+        active = {
+            "e": LetterStats(
+                letter="e",
+                state=LetterState.DEGRADED,
+                rolling_error_rate=0.045,
+                sessions_since_introduced=5,
+            ),
+        }
+        assert manager.recheck_all_states(active) is False
+        assert active["e"].state == LetterState.DEGRADED
+
+    def test_introducing_stays_introducing(self):
+        """INTRODUCING should not promote mid-session (needs session count)."""
+        manager = LetterManager(Config())
+        active = {
+            "e": LetterStats(
+                letter="e",
+                state=LetterState.INTRODUCING,
+                rolling_error_rate=0.02,
+                sessions_since_introduced=0,
+            ),
+        }
+        assert manager.recheck_all_states(active) is False
+        assert active["e"].state == LetterState.INTRODUCING
+
+    def test_multiple_letters_mixed(self):
+        """Multiple letters with different transitions."""
+        manager = LetterManager(Config())
+        active = {
+            "e": LetterStats(
+                letter="e",
+                state=LetterState.STABLE,
+                rolling_error_rate=0.08,
+                sessions_since_introduced=5,
+                accuracy_history=[0.98, 0.97, 0.96],
+            ),
+            "n": LetterStats(
+                letter="n",
+                state=LetterState.STABLE,
+                rolling_error_rate=0.02,
+                sessions_since_introduced=5,
+                accuracy_history=[0.98, 0.97, 0.96],
+            ),
+        }
+        assert manager.recheck_all_states(active) is True
+        assert active["e"].state == LetterState.DEGRADED
+        assert active["n"].state == LetterState.STABLE

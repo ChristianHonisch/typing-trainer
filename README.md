@@ -81,7 +81,7 @@ Settings are stored in `training-data/config.json`, created automatically on fir
 | `advancement_accuracy_window` | `200` | Rolling window size (keystrokes per letter) |
 | `advancement_min_keystrokes` | `500` | Minimum keystrokes before next letter introduction |
 | `session_timeout_minutes` | `30` | Inactivity timeout for session boundaries |
-| `rest_suggestion_seconds` | `30` | Rest countdown between runs |
+| `rest_suggestion_seconds` | `10` | Rest countdown between runs |
 | `default_run_length` | `50` | Default number of characters per run |
 
 See [SPEC.md](SPEC.md) for the full parameter reference and design rationale.

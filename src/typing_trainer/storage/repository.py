@@ -421,6 +421,22 @@ class Repository:
         sessions = self.get_recent_sessions(limit=n)
         return [s.aggregate_accuracy for s in sessions]
 
+    def get_training_time_today(self) -> int:
+        """Total active training seconds today (sum of run durations).
+
+        Counts only runs with both start_time and end_time, where
+        start_time falls on today (local time).
+        """
+        row = self.db.conn.execute(
+            """SELECT COALESCE(SUM(
+                 (julianday(end_time) - julianday(start_time)) * 86400
+               ), 0) AS total_s
+               FROM runs
+               WHERE date(start_time, 'localtime') = date('now', 'localtime')
+                 AND end_time IS NOT NULL"""
+        ).fetchone()
+        return int(row["total_s"])
+
     def get_per_letter_rolling_accuracy(
         self, letters: list[str], window: int = 200
     ) -> dict[str, tuple[float, int]]:

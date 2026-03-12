@@ -136,7 +136,7 @@ class Config:
     session_timeout_minutes: int = 30
     """Inactivity timeout (minutes) that defines a session boundary."""
 
-    rest_suggestion_seconds: int = 30
+    rest_suggestion_seconds: int = 10
     """Suggested rest between runs (seconds)."""
 
     # --- Degradation hysteresis ---

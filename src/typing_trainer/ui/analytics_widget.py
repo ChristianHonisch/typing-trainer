@@ -23,6 +23,7 @@ from typing_trainer.ui.charts.error_heatmap import ErrorHeatmap
 from typing_trainer.ui.charts.per_letter_chart import PerLetterChart
 from typing_trainer.ui.charts.per_letter_rt_chart import PerLetterRtChart
 from typing_trainer.ui.charts.position_chart import PositionChart
+from typing_trainer.ui.charts.run_speed_chart import RunSpeedChart
 from typing_trainer.ui.charts.swap_chart import SwapChart
 from typing_trainer.ui.charts.wpm_chart import WpmChart
 from typing_trainer.ui.theme import (
@@ -80,6 +81,7 @@ class AnalyticsWidget(QWidget):
         self._swap_chart = SwapChart()
         self._position_chart = PositionChart()
         self._bigram_chart = BigramChart()
+        self._run_speed_chart = RunSpeedChart()
 
         self._tabs.addTab(self._accuracy_chart, "Accuracy")
         self._tabs.addTab(self._wpm_chart, "WPM")
@@ -90,6 +92,7 @@ class AnalyticsWidget(QWidget):
         self._tabs.addTab(self._swap_chart, "Swaps")
         self._tabs.addTab(self._position_chart, "Position")
         self._tabs.addTab(self._bigram_chart, "Bigrams")
+        self._tabs.addTab(self._run_speed_chart, "Run Speed")
 
         layout.addWidget(self._tabs)
 
@@ -109,3 +112,4 @@ class AnalyticsWidget(QWidget):
         self._swap_chart.refresh(repo)
         self._position_chart.refresh(repo)
         self._bigram_chart.refresh(repo)
+        self._run_speed_chart.refresh(repo)

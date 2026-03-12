@@ -312,6 +312,11 @@ class MainWindow(QMainWindow):
             acc_long, _count_long = rolling_accuracy_long.get(letter, (1.0, 0))
             stats.rolling_error_rate_long = 1.0 - acc_long
 
+        # Per-run state recheck — detect degradation/recovery immediately
+        # rather than waiting for session end.
+        if self.letter_mgr.recheck_all_states(self._active_letters):
+            self.repo.save_all_letter_states(self._active_letters)
+
         # Letter overview (uses rolling_error_rate_long)
         remaining = [
             ch for ch in self.letter_mgr.introduction_order
@@ -321,7 +326,8 @@ class MainWindow(QMainWindow):
 
         # Config widget letter display
         all_stable = all(
-            s.state == LetterState.STABLE for s in self._active_letters.values()
+            s.state in (LetterState.STABLE, LetterState.MASTERED)
+            for s in self._active_letters.values()
         )
         recent_sessions = self.repo.get_recent_sessions(limit=5)
         speed_available = (
@@ -338,8 +344,23 @@ class MainWindow(QMainWindow):
             self._active_letters, speed_available, transition_available
         )
 
-        # Session dashboard
-        self._session_dashboard.update_session_info(self._current_session)
+        # Session dashboard — compute training times
+        session_active_s = 0
+        session_elapsed_s = 0
+        if self._current_session is not None:
+            for run in self._current_session.runs:
+                if run.start_time is not None and run.end_time is not None:
+                    session_active_s += int(
+                        (run.end_time - run.start_time).total_seconds()
+                    )
+            if self._current_session.start_time is not None:
+                session_elapsed_s = int(
+                    (datetime.now() - self._current_session.start_time).total_seconds()
+                )
+        today_s = self.repo.get_training_time_today()
+        self._session_dashboard.update_session_info(
+            self._current_session, session_active_s, session_elapsed_s, today_s
+        )
 
         # Advancement check
         total_keystrokes = self.repo.get_total_keystrokes_all()
@@ -402,9 +423,10 @@ class MainWindow(QMainWindow):
             bigrams = self._config_widget.get_selected_bigrams()
             self.text_gen.set_target_bigrams(bigrams)
 
-        # Generate text
+        # Generate text using selected letters (user may have deselected some)
+        selected_letters = self._config_widget.get_selected_letters()
         target_text = self.text_gen.generate(
-            practice_type, length, self._active_letters
+            practice_type, length, selected_letters
         )
 
         if not target_text:
@@ -489,8 +511,26 @@ class MainWindow(QMainWindow):
         # Check advancement immediately so the next run includes any new letter
         self._check_and_apply_advancement()
 
+        # Compute settled letters for the intra-run speed chart:
+        # letters with >= 2000 historical keystrokes, best third by accuracy.
+        settled_letters: set[str] = set()
+        rolling_long = self.repo.get_per_letter_rolling_accuracy(
+            list(self._active_letters.keys()), 2000
+        )
+        qualifying = [
+            (letter, acc)
+            for letter, (acc, count) in rolling_long.items()
+            if count >= 2000 and letter != " "
+        ]
+        if qualifying:
+            qualifying.sort(key=lambda t: t[1], reverse=True)  # best first
+            n = max(1, len(qualifying) // 3)
+            settled_letters = {letter for letter, _ in qualifying[:n]}
+
         # Show summary
-        self._summary_widget.show_result(result, previous, speed_result)
+        self._summary_widget.show_result(
+            result, previous, speed_result, settled_letters
+        )
         self._stack.setCurrentIndex(2)
         self._summary_widget.setFocus()
 
