@@ -35,6 +35,7 @@ from typing_trainer.ui.theme import (
     COLOR_BG_INPUT,
     COLOR_ERROR,
     COLOR_ERROR_BG,
+    COLOR_HIGHLIGHT_WEAK,
     COLOR_SUCCESS,
     COLOR_TEXT_BRIGHT,
     COLOR_TEXT_MUTED,
@@ -119,9 +120,15 @@ class TypingWidget(QWidget):
     run_finished = pyqtSignal()
     run_aborted = pyqtSignal()
 
-    def __init__(self, engine: TypingEngine, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        engine: TypingEngine,
+        highlight_letters: set[str] | frozenset[str] = frozenset(),
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         self.engine = engine
+        self._highlight_letters: frozenset[str] = frozenset(highlight_letters)
         self._timer = QElapsedTimer()
         self._abort_pending = False
 
@@ -254,8 +261,13 @@ class TypingWidget(QWidget):
                     # Correct (no first_input record means it was correct)
                     fmt.setForeground(QColor(COLOR_SUCCESS))
             else:
-                # Upcoming (including cursor position): dim grey
-                fmt.setForeground(QColor(COLOR_TEXT_MUTED))
+                # Upcoming (including cursor position)
+                if char in self._highlight_letters:
+                    # Weak letter: pale yellow for attention
+                    fmt.setForeground(QColor(COLOR_HIGHLIGHT_WEAK))
+                else:
+                    # Normal upcoming: dim grey
+                    fmt.setForeground(QColor(COLOR_TEXT_MUTED))
 
             cursor.insertText(char, fmt)
 

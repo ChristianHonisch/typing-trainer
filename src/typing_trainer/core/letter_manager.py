@@ -384,15 +384,17 @@ class LetterManager:
                 return LetterState.MASTERED
 
             case LetterState.DEGRADED:
-                # Recovery uses rolling error rate (same metric as degradation
-                # entry) but with a tighter threshold to prevent oscillation.
-                # E.g. entry at >5% error, recovery at <=4% (with 0.8 margin).
-                # Always recovers to STABLE — re-entry to MASTERED happens
-                # at the next session if mastery_score is still above threshold.
+                # Recovery goes through CONSOLIDATING rather than jumping
+                # straight to STABLE.  The letter must then pass the normal
+                # consolidation check (3 consecutive sessions >= threshold)
+                # before reaching STABLE again.  This provides a structural
+                # stability guarantee instead of a threshold-based hysteresis
+                # gap, and keeps the UI consistent (a letter at exactly 95%
+                # shows as CONSOLIDATING everywhere, not green in one place
+                # and red in another).
                 entry_threshold = 1.0 - self.config.advancement_accuracy
-                recovery_threshold = entry_threshold * self.config.degraded_recovery_margin
-                if stats.rolling_error_rate <= recovery_threshold:
-                    return LetterState.STABLE
+                if stats.rolling_error_rate <= entry_threshold:
+                    return LetterState.CONSOLIDATING
                 return LetterState.DEGRADED
 
             case _:

@@ -52,6 +52,7 @@ COLOR_TEXT_PRIMARY = "#cccccc"
 COLOR_TEXT_SECONDARY = "#888888"
 COLOR_TEXT_MUTED = "#666666"
 COLOR_TEXT_BRIGHT = "#ffffff"
+COLOR_HIGHLIGHT_WEAK = "#ffeeaa"
 
 # ---------------------------------------------------------------------------
 # Button colors

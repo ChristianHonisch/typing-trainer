@@ -14,6 +14,7 @@ from __future__ import annotations
 from PyQt6.QtCore import QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QKeyEvent
 from PyQt6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QGroupBox,
     QHBoxLayout,
@@ -182,6 +183,29 @@ class RunConfigWidget(QWidget):
 
         layout.addLayout(config_layout)
 
+        # Highlight weak letters option
+        highlight_layout = QHBoxLayout()
+        highlight_layout.setSpacing(6)
+
+        self._highlight_cb = QCheckBox("Highlight weak")
+        self._highlight_cb.setFont(app_font(10))
+        self._highlight_cb.setChecked(True)
+        highlight_layout.addWidget(self._highlight_cb)
+
+        self._highlight_count_spin = QSpinBox()
+        self._highlight_count_spin.setFont(app_font(10))
+        self._highlight_count_spin.setRange(0, 10)
+        self._highlight_count_spin.setValue(3)
+        self._highlight_count_spin.setSingleStep(1)
+        highlight_layout.addWidget(self._highlight_count_spin)
+
+        highlight_suffix = QLabel("letters")
+        highlight_suffix.setFont(app_font(10))
+        highlight_layout.addWidget(highlight_suffix)
+
+        highlight_layout.addStretch()
+        layout.addLayout(highlight_layout)
+
         layout.addStretch()
 
         # Rest timer label (shown after a run completes)
@@ -253,6 +277,7 @@ class RunConfigWidget(QWidget):
         self._rebuild_letter_toggles()
         self._update_mode_warning()
         self._update_practice_types()
+        self._update_highlight_max()
 
     def _rebuild_letter_toggles(self) -> None:
         """Rebuild the letter toggle buttons to match current active letters.
@@ -325,6 +350,7 @@ class RunConfigWidget(QWidget):
             self._selected_letters.discard(letter)
         self._update_toggle_styles()
         self._update_start_button()
+        self._update_highlight_max()
 
     def _update_toggle_styles(self) -> None:
         """Update visual styling of toggle buttons based on selection."""
@@ -377,6 +403,37 @@ class RunConfigWidget(QWidget):
             for letter, stats in self._active_letters.items()
             if letter in self._selected_letters
         }
+
+    def _update_highlight_max(self) -> None:
+        """Clamp the highlight spinbox max to (non-space selected letters - 1)."""
+        non_space = sum(
+            1 for l in self._selected_letters if l != " "
+        )
+        new_max = max(0, non_space - 1)
+        self._highlight_count_spin.setMaximum(new_max)
+
+    def get_highlight_letters(self) -> set[str]:
+        """Return the set of letters that should be highlighted as weak.
+
+        Selects the N worst letters by rolling error rate (200-keystroke
+        window) from the currently selected non-space letters.  Returns
+        an empty set when the checkbox is unchecked or N is 0.
+        """
+        if not self._highlight_cb.isChecked():
+            return set()
+        n = self._highlight_count_spin.value()
+        if n <= 0:
+            return set()
+
+        # Only consider selected non-space letters
+        candidates = [
+            (letter, stats)
+            for letter, stats in self._active_letters.items()
+            if letter in self._selected_letters and letter != " "
+        ]
+        # Sort by rolling_error_rate descending (worst first)
+        candidates.sort(key=lambda t: t[1].rolling_error_rate, reverse=True)
+        return {letter for letter, _ in candidates[:n]}
 
     # ------------------------------------------------------------------
     # Alerts, mode, practice type

@@ -22,7 +22,6 @@ from collections import deque
 import numpy as np
 import pyqtgraph as pg
 
-from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
@@ -32,7 +31,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from typing_trainer.core.stats import RT_CAP_MS
+from typing_trainer.core.stats import RT_CAP_MS, compute_position_baselines
 from typing_trainer.models.letter_state import ErrorType
 from typing_trainer.models.run_result import RunResult
 from typing_trainer.storage.repository import Repository
@@ -45,7 +44,8 @@ from typing_trainer.ui.theme import (
     app_font,
 )
 
-_DEFAULT_WINDOW = 10
+_DEFAULT_WINDOW = 1
+_DEFAULT_EXCLUDE_PCT = 0
 _WARMUP = 3  # same as config default; overridden at refresh if needed
 
 
@@ -87,11 +87,27 @@ class RunSpeedChart(QWidget):
 
         self._window_spin = QSpinBox()
         self._window_spin.setFont(app_font(10))
-        self._window_spin.setRange(3, 50)
+        self._window_spin.setRange(1, 50)
         self._window_spin.setSingleStep(1)
         self._window_spin.setValue(_DEFAULT_WINDOW)
         self._window_spin.valueChanged.connect(self._redraw)
         controls.addWidget(self._window_spin)
+
+        controls.addSpacing(20)
+
+        excl_label = QLabel("Exclude:")
+        excl_label.setFont(app_font(10))
+        controls.addWidget(excl_label)
+
+        self._exclude_spin = QSpinBox()
+        self._exclude_spin.setFont(app_font(10))
+        self._exclude_spin.setRange(0, 30)
+        self._exclude_spin.setSingleStep(1)
+        self._exclude_spin.setValue(_DEFAULT_EXCLUDE_PCT)
+        self._exclude_spin.setSuffix("%")
+        self._exclude_spin.setToolTip("Exclude the slowest X% of keystrokes")
+        self._exclude_spin.valueChanged.connect(self._redraw)
+        controls.addWidget(self._exclude_spin)
 
         controls.addStretch()
         layout.addLayout(controls)
@@ -222,6 +238,25 @@ class RunSpeedChart(QWidget):
         if len(all_rt) < 2:
             return
 
+        # ── Exclude slowest X% (per stream) ──
+        exclude_pct = self._exclude_spin.value()
+        if exclude_pct > 0:
+            def _exclude(
+                positions: list[int], rts: list[float],
+            ) -> tuple[list[int], list[float]]:
+                if len(rts) < 2:
+                    return positions, rts
+                thresh = float(np.percentile(rts, 100 - exclude_pct))
+                filt = [(p, r) for p, r in zip(positions, rts) if r <= thresh]
+                return [x[0] for x in filt], [x[1] for x in filt]
+
+            all_pos, all_rt = _exclude(all_pos, all_rt)
+            settled_pos, settled_rt = _exclude(settled_pos, settled_rt)
+            space_pos, space_rt = _exclude(space_pos, space_rt)
+
+            if len(all_rt) < 2:
+                return
+
         # ── Helper: rolling mean ──
         def rolling(
             positions: list[int], rts: list[float],
@@ -286,11 +321,56 @@ class RunSpeedChart(QWidget):
                 symbolPen=None,
             )
 
-        # ── Target RT line (speed runs) ──
-        if run.mode.value == "speed" and run.wpm > 0:
-            # Approximate target from achieved WPM (not ideal, but we don't
-            # store target_wpm on the run — use run WPM as reference).
-            pass  # No target info available from DB; skip for analysis view
+        # ── Historical baselines (dashed lines) ──
+        if self._repo is not None and run.target_length > 0:
+            raw_hist = self._repo.get_historical_position_rts(
+                min_target_length=run.target_length, n_runs=64,
+                warmup=warmup,
+            )
+            if raw_hist:
+                bl_all, bl_settled, bl_space = compute_position_baselines(
+                    raw_hist, settled,
+                )
+                dash_pen_all = pg.mkPen(COLOR_SUCCESS, width=1.5)
+                dash_pen_all.setDashPattern([8, 6])
+                dash_pen_settled = pg.mkPen("#44aaff", width=1.5)
+                dash_pen_settled.setDashPattern([8, 6])
+                dash_pen_space = pg.mkPen("#44cccc", width=1.5)
+                dash_pen_space.setDashPattern([8, 6])
+
+                run_positions = set(all_pos)
+                bl_all_pts = sorted(
+                    (p, v) for p, v in bl_all.items() if p in run_positions
+                )
+                if len(bl_all_pts) >= 2:
+                    bx = np.array([p for p, _ in bl_all_pts], dtype=np.float64)
+                    by = np.array([v for _, v in bl_all_pts], dtype=np.float64)
+                    self._plot.plot(
+                        bx, by, pen=dash_pen_all, name="Avg All",
+                    )
+                    y_max = max(y_max, float(by.max()))
+
+                bl_set_pts = sorted(
+                    (p, v) for p, v in bl_settled.items() if p in run_positions
+                )
+                if len(bl_set_pts) >= 2:
+                    bx = np.array([p for p, _ in bl_set_pts], dtype=np.float64)
+                    by = np.array([v for _, v in bl_set_pts], dtype=np.float64)
+                    self._plot.plot(
+                        bx, by, pen=dash_pen_settled, name="Avg Settled",
+                    )
+                    y_max = max(y_max, float(by.max()))
+
+                bl_sp_pts = sorted(
+                    (p, v) for p, v in bl_space.items() if p in run_positions
+                )
+                if len(bl_sp_pts) >= 2:
+                    bx = np.array([p for p, _ in bl_sp_pts], dtype=np.float64)
+                    by = np.array([v for _, v in bl_sp_pts], dtype=np.float64)
+                    self._plot.plot(
+                        bx, by, pen=dash_pen_space, name="Avg Space",
+                    )
+                    y_max = max(y_max, float(by.max()))
 
         # ── Y range ──
         if y_max > 0:

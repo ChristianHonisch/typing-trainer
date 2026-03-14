@@ -100,6 +100,22 @@ class Config:
     maintaining contextual interference even for the neediest letter.
     """
 
+    min_letters_no_repeat: int = 5
+    """Minimum total active non-space letters to enable the global
+    no-immediate-repeat constraint in random string generation.
+
+    When active, the same letter cannot appear twice in a row, even across
+    a space boundary (e.g. ``a a`` is prevented).  Below this threshold
+    the old rule applies: doubles allowed, triples blocked."""
+
+    min_hand_letters_no_repeat: int = 4
+    """Minimum active letters on one hand to enable per-hand no-repeat.
+
+    When active, the last letter typed by a hand cannot be repeated by
+    that hand, even if the other hand typed letters in between.  This
+    forces finger variety within each hand.  Below this threshold the
+    per-hand constraint is skipped for that hand."""
+
     # --- Training weight bonuses ---
     weight_introducing: float = 3.0
     """State bonus for letters in INTRODUCING state."""
@@ -141,13 +157,16 @@ class Config:
 
     # --- Degradation hysteresis ---
     degraded_recovery_margin: float = 0.8
-    """Multiplier for the DEGRADED -> STABLE recovery threshold.
+    """**Deprecated** — no longer used in the state machine.
 
-    To exit DEGRADED, the rolling error rate must be at or below
-    ``(1 - advancement_accuracy) * degraded_recovery_margin``.  At the
-    default values (0.95 accuracy, 0.8 margin) the recovery threshold
-    is 4% instead of the 5% entry threshold, creating a 1% hysteresis
-    gap that prevents rapid state oscillation.
+    DEGRADED letters now recover to CONSOLIDATING (not STABLE) once
+    their rolling error rate drops to or below the standard
+    ``advancement_accuracy`` threshold.  The consolidation period
+    (3 sessions >= threshold) provides a structural stability guarantee
+    instead of the former threshold-based hysteresis gap.
+
+    This field is retained for backward compatibility with existing
+    ``config.json`` files but has no effect on behaviour.
     """
 
     # --- Bigram transition training ---

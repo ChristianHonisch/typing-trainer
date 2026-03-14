@@ -117,7 +117,7 @@ class TestRandomStrings:
                     ), f"Found 3+ consecutive '{text[i]}' at position {i}: ...{text[max(0,i-2):i+5]}..."
 
     def test_allows_double_letters(self):
-        """Double letters (e.g. 'ee') should still be allowed."""
+        """Double letters (e.g. 'ee') should still be allowed with few letters."""
         config = Config()
         gen = TextGenerator(config)
         active = make_active_letters("e", "n")
@@ -129,6 +129,148 @@ class TestRandomStrings:
         ]
         all_text = "".join(texts)
         assert "ee" in all_text or "nn" in all_text
+
+    def test_global_no_repeat_ignoring_spaces(self):
+        """With >= 5 letters, no immediate repeat even across spaces."""
+        config = Config(min_letters_no_repeat=5)
+        gen = TextGenerator(config)
+        # 5 letters from both hands
+        active = make_active_letters("e", "n", "i", "s", "r")
+
+        for _ in range(30):
+            text = gen.generate(PracticeType.RANDOM_STRINGS, 500, active)
+            # Strip spaces and check for consecutive duplicates
+            non_space = [c for c in text if c != " "]
+            for j in range(len(non_space) - 1):
+                assert non_space[j] != non_space[j + 1], (
+                    f"Global repeat '{non_space[j]}' at non-space position "
+                    f"{j} in: ...{text[max(0, j-3):j+6]}..."
+                )
+
+    def test_global_no_repeat_disabled_below_threshold(self):
+        """With < 5 letters, doubles (across spaces) can still occur."""
+        config = Config(min_letters_no_repeat=5)
+        gen = TextGenerator(config)
+        # Only 3 letters — below threshold
+        active = make_active_letters("e", "n", "i")
+
+        # With 3 letters, over many runs doubles must appear
+        found_double = False
+        for _ in range(50):
+            text = gen.generate(PracticeType.RANDOM_STRINGS, 500, active)
+            non_space = [c for c in text if c != " "]
+            for j in range(len(non_space) - 1):
+                if non_space[j] == non_space[j + 1]:
+                    found_double = True
+                    break
+            if found_double:
+                break
+        assert found_double, "Expected doubles with only 3 letters"
+
+    def test_per_hand_no_repeat(self):
+        """With >= 4 letters on a hand, that hand never repeats its last letter.
+
+        Left hand has e(2), s(1), r(3), a(0) = 4 letters (fingers 0-3).
+        Right hand has n(6), i(7) = 2 letters (below threshold).
+        So left-hand no-repeat should be active, right-hand not.
+        """
+        config = Config(min_hand_letters_no_repeat=4)
+        gen = TextGenerator(config)
+        active = make_active_letters("e", "s", "r", "a", "n", "i")
+
+        from typing_trainer.models.keyboard_layout import QWERTZ_FINGER_MAP
+
+        for _ in range(30):
+            text = gen.generate(PracticeType.RANDOM_STRINGS, 500, active)
+            # Extract left-hand letters only (ignoring spaces and right-hand)
+            left_stream = [
+                c for c in text
+                if c != " " and 0 <= QWERTZ_FINGER_MAP.get(c, -1) <= 3
+            ]
+            for j in range(len(left_stream) - 1):
+                assert left_stream[j] != left_stream[j + 1], (
+                    f"Left-hand repeat '{left_stream[j]}' at stream "
+                    f"position {j}"
+                )
+
+    def test_per_hand_no_repeat_both_hands(self):
+        """With enough letters on both hands, neither hand repeats."""
+        config = Config(min_hand_letters_no_repeat=4)
+        gen = TextGenerator(config)
+        # Left: e(2), s(1), r(3), a(0) = 4
+        # Right: n(6), i(7), l(8), h(6) — but h and n share finger 6,
+        #   so we need: n(6), i(7), l(8), p(9) = 4 unique fingers
+        active = make_active_letters(
+            "e", "s", "r", "a",   # left: 4
+            "n", "i", "l", "p",   # right: 4
+        )
+
+        from typing_trainer.models.keyboard_layout import QWERTZ_FINGER_MAP
+
+        for _ in range(30):
+            text = gen.generate(PracticeType.RANDOM_STRINGS, 500, active)
+
+            left_stream = [
+                c for c in text
+                if c != " " and 0 <= QWERTZ_FINGER_MAP.get(c, -1) <= 3
+            ]
+            right_stream = [
+                c for c in text
+                if c != " " and QWERTZ_FINGER_MAP.get(c, -1) >= 6
+            ]
+
+            for j in range(len(left_stream) - 1):
+                assert left_stream[j] != left_stream[j + 1], (
+                    f"Left-hand repeat '{left_stream[j]}' at position {j}"
+                )
+            for j in range(len(right_stream) - 1):
+                assert right_stream[j] != right_stream[j + 1], (
+                    f"Right-hand repeat '{right_stream[j]}' at position {j}"
+                )
+
+    def test_per_hand_disabled_below_threshold(self):
+        """With < 4 letters on a hand, per-hand repeat is allowed."""
+        config = Config(min_hand_letters_no_repeat=4)
+        gen = TextGenerator(config)
+        # Right hand only has n(6), i(7) = 2 letters — below threshold
+        # Left hand has e(2), s(1), r(3), a(0) = 4 letters
+        # Use min_letters_no_repeat=99 to disable global constraint
+        config.min_letters_no_repeat = 99
+        active = make_active_letters("e", "s", "r", "a", "n", "i")
+
+        from typing_trainer.models.keyboard_layout import QWERTZ_FINGER_MAP
+
+        found_right_repeat = False
+        for _ in range(50):
+            text = gen.generate(PracticeType.RANDOM_STRINGS, 500, active)
+            right_stream = [
+                c for c in text
+                if c != " " and QWERTZ_FINGER_MAP.get(c, -1) >= 6
+            ]
+            for j in range(len(right_stream) - 1):
+                if right_stream[j] == right_stream[j + 1]:
+                    found_right_repeat = True
+                    break
+            if found_right_repeat:
+                break
+        assert found_right_repeat, (
+            "Expected right-hand repeats with only 2 right-hand letters"
+        )
+
+    def test_configurable_thresholds(self):
+        """Custom thresholds are respected."""
+        # Set global threshold to 3 — should activate with 3 letters
+        config = Config(min_letters_no_repeat=3)
+        gen = TextGenerator(config)
+        active = make_active_letters("e", "n", "i")
+
+        for _ in range(30):
+            text = gen.generate(PracticeType.RANDOM_STRINGS, 500, active)
+            non_space = [c for c in text if c != " "]
+            for j in range(len(non_space) - 1):
+                assert non_space[j] != non_space[j + 1], (
+                    f"Global repeat with threshold=3 and 3 letters"
+                )
 
 
 class TestRandomWords:

@@ -12,6 +12,7 @@ import random
 from pathlib import Path
 
 from typing_trainer.config import Config
+from typing_trainer.models.keyboard_layout import QWERTZ_FINGER_MAP
 from typing_trainer.models.letter_state import LetterStats, PracticeType
 
 
@@ -73,6 +74,20 @@ class TextGenerator:
 
         Characters are drawn from the active letter set, weighted by
         need-based training weight (state bonus + accuracy gap bonus).
+
+        Anti-repetition rules (when enough letters are active):
+
+        **Global no-repeat** (>= ``min_letters_no_repeat`` non-space
+        letters): the same letter cannot appear twice in a row, even
+        across a space boundary (``a a`` is prevented).
+
+        **Per-hand no-repeat** (>= ``min_hand_letters_no_repeat``
+        letters on one hand): the last letter typed by each hand cannot
+        be repeated by that hand, regardless of letters the other hand
+        typed in between.  Spaces (thumb) are ignored for hand tracking.
+
+        When the constraints are not active (too few letters), the
+        fallback rule is: doubles allowed, triples blocked.
         """
         if not active_letters:
             return ""
@@ -80,6 +95,25 @@ class TextGenerator:
         letters, weights = self._compute_weights(active_letters)
         if not letters:
             return ""
+
+        # ── Hand membership ──
+        left_active: set[str] = set()
+        right_active: set[str] = set()
+        for lt in letters:
+            finger = QWERTZ_FINGER_MAP.get(lt, -1)
+            if 0 <= finger <= 3:
+                left_active.add(lt)
+            elif finger >= 6:
+                right_active.add(lt)
+
+        enable_global = len(letters) >= self.config.min_letters_no_repeat
+        enable_left = len(left_active) >= self.config.min_hand_letters_no_repeat
+        enable_right = len(right_active) >= self.config.min_hand_letters_no_repeat
+
+        # ── State tracking ──
+        last_nonspace: str | None = None
+        last_left: str | None = None
+        last_right: str | None = None
 
         result: list[str] = []
         chars_since_space = 0
@@ -92,26 +126,63 @@ class TextGenerator:
                 chars_since_space = 0
                 next_space_at = random.randint(3, 6)
             else:
-                char = random.choices(letters, weights=weights, k=1)[0]
-                # Prevent more than 2 consecutive identical characters.
-                # Motor learning: double-taps (e.g. "ll") are useful,
-                # but 3+ identical in a row is massed repetition with
-                # no transfer to real typing patterns.
-                if (
-                    len(letters) > 1
-                    and len(result) >= 2
-                    and result[-1] == char
-                    and result[-2] == char
-                ):
-                    # Redraw excluding the repeated character
+                # Build exclusion set
+                exclude: set[str] = set()
+
+                if enable_global and last_nonspace is not None:
+                    exclude.add(last_nonspace)
+
+                if enable_left and last_left is not None:
+                    exclude.add(last_left)
+
+                if enable_right and last_right is not None:
+                    exclude.add(last_right)
+
+                if exclude:
                     filtered = [
                         (lt, wt)
                         for lt, wt in zip(letters, weights)
-                        if lt != char
+                        if lt not in exclude
                     ]
                     if filtered:
                         f_letters, f_weights = zip(*filtered)
-                        char = random.choices(f_letters, weights=f_weights, k=1)[0]
+                        char = random.choices(
+                            f_letters, weights=f_weights, k=1
+                        )[0]
+                    else:
+                        # All letters excluded (shouldn't happen with
+                        # thresholds >= 4, but safety fallback)
+                        char = random.choices(
+                            letters, weights=weights, k=1
+                        )[0]
+                else:
+                    char = random.choices(letters, weights=weights, k=1)[0]
+                    # Fallback: block triples when constraints are off
+                    if (
+                        len(letters) > 1
+                        and len(result) >= 2
+                        and result[-1] == char
+                        and result[-2] == char
+                    ):
+                        fb_filtered = [
+                            (lt, wt)
+                            for lt, wt in zip(letters, weights)
+                            if lt != char
+                        ]
+                        if fb_filtered:
+                            fb_letters, fb_weights = zip(*fb_filtered)
+                            char = random.choices(
+                                fb_letters, weights=fb_weights, k=1
+                            )[0]
+
+                # Update trackers
+                last_nonspace = char
+                finger = QWERTZ_FINGER_MAP.get(char, -1)
+                if 0 <= finger <= 3:
+                    last_left = char
+                elif finger >= 6:
+                    last_right = char
+
                 result.append(char)
                 chars_since_space += 1
 

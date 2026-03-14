@@ -81,9 +81,10 @@ class LetterOverviewWidget(QWidget):
         # Table
         self._table = QTableWidget()
         self._table.setFont(app_font(11))
-        self._table.setColumnCount(7)
+        self._table.setColumnCount(8)
         self._table.setHorizontalHeaderLabels(
-            ["Letter", "State", "Last Err", "Rolling Err", "Stability", "Mastery", "Sessions"]
+            ["Letter", "State", "Keystrokes", "Last Err", "Rolling Err",
+             "Stability", "Mastery", "Sessions"]
         )
         header = self._table.horizontalHeader()
         assert header is not None
@@ -99,6 +100,7 @@ class LetterOverviewWidget(QWidget):
         self,
         active_letters: dict[str, LetterStats],
         remaining_letters: list[str] | None = None,
+        keystroke_counts: dict[str, int] | None = None,
     ) -> None:
         """Refresh the table with current letter states.
 
@@ -107,6 +109,8 @@ class LetterOverviewWidget(QWidget):
             remaining_letters: Letters not yet introduced, in introduction
                 order.  Displayed as greyed-out "Locked" rows below the
                 active letters.
+            keystroke_counts: Total all-time keystrokes per letter (from
+                :meth:`Repository.get_per_letter_error_rates`).
         """
         # Disable sorting while populating to avoid crashes
         self._table.setSortingEnabled(False)
@@ -131,6 +135,12 @@ class LetterOverviewWidget(QWidget):
             state_item.setForeground(QColor(color))
             self._table.setItem(row, 1, state_item)
 
+            # Keystrokes (total all-time)
+            ks_counts = keystroke_counts or {}
+            ks_val = ks_counts.get(letter, 0)
+            ks_item = _NumericTableItem(f"{ks_val:,}", float(ks_val))
+            self._table.setItem(row, 2, ks_item)
+
             # Last error rate (most recent session)
             last_err_val = stats.error_rate_latest
             last_err_item = _NumericTableItem(f"{last_err_val:.1%}", last_err_val)
@@ -138,7 +148,7 @@ class LetterOverviewWidget(QWidget):
                 last_err_item.setForeground(QColor(COLOR_ERROR))
             elif last_err_val > 0.05:
                 last_err_item.setForeground(QColor(COLOR_WARNING))
-            self._table.setItem(row, 2, last_err_item)
+            self._table.setItem(row, 3, last_err_item)
 
             # Rolling error rate (2000-keystroke window)
             rolling_val = stats.rolling_error_rate_long
@@ -149,28 +159,28 @@ class LetterOverviewWidget(QWidget):
                 rolling_err_item.setForeground(QColor(COLOR_ERROR))
             elif rolling_val > 0.05:
                 rolling_err_item.setForeground(QColor(COLOR_WARNING))
-            self._table.setItem(row, 3, rolling_err_item)
+            self._table.setItem(row, 4, rolling_err_item)
 
             # Stability
             stab_val = stats.stability_score
             stability_item = _NumericTableItem(f"{stab_val:.2f}", stab_val)
             if stab_val < 0.5:
                 stability_item.setForeground(QColor(COLOR_ERROR))
-            self._table.setItem(row, 4, stability_item)
+            self._table.setItem(row, 5, stability_item)
 
             # Mastery
             mast_val = stats.mastery_score
             mastery_item = _NumericTableItem(f"{mast_val:.2f}", mast_val)
             if mast_val >= 0.8:
                 mastery_item.setForeground(QColor(COLOR_MASTERED))
-            self._table.setItem(row, 5, mastery_item)
+            self._table.setItem(row, 6, mastery_item)
 
             # Sessions since introduced
             sess_val = float(stats.sessions_since_introduced)
             sessions_item = _NumericTableItem(
                 str(stats.sessions_since_introduced), sess_val
             )
-            self._table.setItem(row, 6, sessions_item)
+            self._table.setItem(row, 7, sessions_item)
 
         # Locked (not yet introduced) letters — grey placeholder rows
         # Use sort values that push them to the bottom (high for asc, low
@@ -191,11 +201,11 @@ class LetterOverviewWidget(QWidget):
             locked_item.setForeground(muted)
             self._table.setItem(row, 1, locked_item)
 
-            for col in range(2, 7):
+            for col in range(2, 8):
                 dash = _NumericTableItem("-", -1.0)
                 dash.setForeground(muted)
                 self._table.setItem(row, col, dash)
 
         # Re-enable sorting and apply default sort
         self._table.setSortingEnabled(True)
-        self._table.sortByColumn(6, Qt.SortOrder.DescendingOrder)
+        self._table.sortByColumn(7, Qt.SortOrder.DescendingOrder)

@@ -267,17 +267,17 @@ class TestMasteryStateTransitions:
         assert new_state == LetterState.MASTERED
 
     def test_degraded_recovers_to_stable_not_mastered(self):
-        """DEGRADED letter recovers to STABLE, not directly to MASTERED."""
+        """DEGRADED letter recovers to CONSOLIDATING, not directly to MASTERED."""
         config = Config()
         manager = LetterManager(config)
         stats = LetterStats(
             letter="e",
             state=LetterState.DEGRADED,
-            mastery_score=0.9,  # High mastery, but still recovers to STABLE
-            rolling_error_rate=0.03,  # Below recovery threshold (4%)
+            mastery_score=0.9,  # High mastery, but still recovers to CONSOLIDATING
+            rolling_error_rate=0.03,  # Below entry threshold (5%)
         )
         new_state = manager._compute_new_state(stats)
-        assert new_state == LetterState.STABLE
+        assert new_state == LetterState.CONSOLIDATING
 
     def test_degraded_mastery_not_reset(self):
         """Mastery score is NOT reset when a letter degrades."""

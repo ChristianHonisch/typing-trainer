@@ -2,8 +2,8 @@
 
 Sub-tabs:
   - Accuracy: per-run accuracy over time
+  - Accuracy (Letter): rolling accuracy per letter with selector
   - WPM: per-run WPM over time
-  - Per-Letter: rolling accuracy per letter with selector
   - Per-Letter RT: mean reaction time per letter with selector
   - Errors: stacked error rate per letter, by error type
   - Confusion Matrix: top confusion pairs bar chart + grid heatmap
@@ -15,11 +15,15 @@ from __future__ import annotations
 
 from PyQt6.QtWidgets import QTabWidget, QVBoxLayout, QWidget
 
+from typing_trainer.config import Config
 from typing_trainer.storage.repository import Repository
 from typing_trainer.ui.charts.accuracy_chart import AccuracyChart
 from typing_trainer.ui.charts.bigram_chart import BigramChart
 from typing_trainer.ui.charts.confusion_matrix_chart import ConfusionMatrixChart
 from typing_trainer.ui.charts.error_heatmap import ErrorHeatmap
+from typing_trainer.ui.charts.error_timeline_chart import ErrorTimelineChart
+from typing_trainer.ui.charts.error_window_chart import ErrorWindowChart
+from typing_trainer.ui.charts.letter_occurrence_chart import LetterOccurrenceChart
 from typing_trainer.ui.charts.per_letter_chart import PerLetterChart
 from typing_trainer.ui.charts.per_letter_rt_chart import PerLetterRtChart
 from typing_trainer.ui.charts.position_chart import PositionChart
@@ -39,8 +43,11 @@ from typing_trainer.ui.theme import (
 class AnalyticsWidget(QWidget):
     """Container for all analytics charts, organized in sub-tabs."""
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self, config: Config | None = None, parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
+        self._config = config or Config()
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -82,10 +89,13 @@ class AnalyticsWidget(QWidget):
         self._position_chart = PositionChart()
         self._bigram_chart = BigramChart()
         self._run_speed_chart = RunSpeedChart()
+        self._error_window_chart = ErrorWindowChart(self._config)
+        self._error_timeline_chart = ErrorTimelineChart()
+        self._letter_occurrence_chart = LetterOccurrenceChart()
 
         self._tabs.addTab(self._accuracy_chart, "Accuracy")
+        self._tabs.addTab(self._per_letter_chart, "Accuracy (Letter)")
         self._tabs.addTab(self._wpm_chart, "WPM")
-        self._tabs.addTab(self._per_letter_chart, "Per-Letter")
         self._tabs.addTab(self._per_letter_rt_chart, "Per-Letter RT")
         self._tabs.addTab(self._error_heatmap, "Errors")
         self._tabs.addTab(self._confusion_matrix, "Confusion Matrix")
@@ -93,6 +103,9 @@ class AnalyticsWidget(QWidget):
         self._tabs.addTab(self._position_chart, "Position")
         self._tabs.addTab(self._bigram_chart, "Bigrams")
         self._tabs.addTab(self._run_speed_chart, "Run Speed")
+        self._tabs.addTab(self._error_window_chart, "Error Window")
+        self._tabs.addTab(self._error_timeline_chart, "Error Timeline")
+        self._tabs.addTab(self._letter_occurrence_chart, "Letter %")
 
         layout.addWidget(self._tabs)
 
@@ -113,3 +126,6 @@ class AnalyticsWidget(QWidget):
         self._position_chart.refresh(repo)
         self._bigram_chart.refresh(repo)
         self._run_speed_chart.refresh(repo)
+        self._error_window_chart.refresh(repo)
+        self._error_timeline_chart.refresh(repo)
+        self._letter_occurrence_chart.refresh(repo)

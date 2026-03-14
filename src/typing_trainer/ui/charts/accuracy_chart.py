@@ -2,6 +2,8 @@
 
 Line plot showing per-run accuracy with a 95% threshold reference line.
 Failed runs are marked with red scatter points.
+A secondary right Y-axis shows the number of unlocked (active) letters
+as a step line.
 """
 
 from __future__ import annotations
@@ -20,6 +22,8 @@ from typing_trainer.ui.theme import (
     COLOR_TEXT_SECONDARY,
     COLOR_WARNING,
 )
+
+_COLOR_LETTERS = "#888888"
 
 
 class AccuracyChart(QWidget):
@@ -44,11 +48,35 @@ class AccuracyChart(QWidget):
         # Y-axis as percentage
         self._plot.getViewBox().setYRange(0.7, 1.02, padding=0)
 
+        # Second Y-axis (right) for active letter count
+        self._right_vb = pg.ViewBox()
+        plot_item = self._plot.plotItem
+        assert plot_item is not None
+        plot_item.showAxis("right")
+        plot_item.scene().addItem(self._right_vb)
+        plot_item.getAxis("right").linkToView(self._right_vb)
+        self._right_vb.setXLink(plot_item)
+        plot_item.getAxis("right").setLabel("Letters", color=_COLOR_LETTERS)
+        plot_item.getAxis("right").setTextPen(_COLOR_LETTERS)
+
+        # Keep right ViewBox geometry in sync
+        vb = plot_item.vb
+        assert vb is not None
+        vb.sigResized.connect(self._update_right_vb)
+
         layout.addWidget(self._plot)
+
+    def _update_right_vb(self) -> None:
+        plot_item = self._plot.plotItem
+        assert plot_item is not None
+        vb = plot_item.vb
+        assert vb is not None
+        self._right_vb.setGeometry(vb.sceneBoundingRect())
 
     def refresh(self, repo: Repository) -> None:
         """Reload data from DB and redraw."""
         self._plot.clear()
+        self._right_vb.clear()
 
         runs = repo.get_all_runs_summary()
         if not runs:
@@ -93,7 +121,52 @@ class AccuracyChart(QWidget):
         )
         self._plot.addItem(threshold)
 
-        # Auto-range x, keep y fixed
+        # Active letter count on right axis (step line)
+        letter_counts = repo.get_letter_count_at_runs()
+        if letter_counts:
+            # Build step data: duplicate each point to create horizontal
+            # segments, then a vertical jump
+            x_step: list[float] = []
+            y_step: list[float] = []
+            for i, (run_num, count) in enumerate(letter_counts):
+                if i == 0:
+                    x_step.append(float(run_num))
+                    y_step.append(float(count))
+                else:
+                    # Horizontal segment at previous count up to this run
+                    x_step.append(float(run_num))
+                    y_step.append(y_step[-1])
+                    # Vertical jump to new count
+                    x_step.append(float(run_num))
+                    y_step.append(float(count))
+            # Extend to the end of the x-axis
+            if len(runs) > 0:
+                last_run = len(runs)
+                if x_step[-1] < last_run:
+                    x_step.append(float(last_run))
+                    y_step.append(y_step[-1])
+
+            letters_curve = pg.PlotDataItem(
+                np.array(x_step, dtype=np.float64),
+                np.array(y_step, dtype=np.float64),
+                pen=pg.mkPen(_COLOR_LETTERS, width=1),
+            )
+            self._right_vb.addItem(letters_curve)
+
+            counts_arr = np.array(
+                [c for _, c in letter_counts], dtype=np.float64
+            )
+            count_min = float(counts_arr.min())
+            count_max = float(counts_arr.max())
+            padding = max(1, (count_max - count_min) * 0.15)
+            self._right_vb.setYRange(
+                count_min - padding, count_max + padding, padding=0,
+            )
+
+        # Auto-range left y-axis
         self._plot.getViewBox().setYRange(
             max(0.5, float(y_all.min()) - 0.05), 1.02, padding=0
         )
+
+        # Force geometry update
+        self._update_right_vb()

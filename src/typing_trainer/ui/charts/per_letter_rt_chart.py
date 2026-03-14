@@ -32,6 +32,7 @@ from PyQt6.QtWidgets import (
 
 from typing_trainer.core.stats import trimmed_mean
 from typing_trainer.storage.repository import Repository
+from typing_trainer.ui.charts.interactive_legend import InteractiveLegend
 from typing_trainer.ui.theme import (
     COLOR_BG_DARK,
     COLOR_TEXT_PRIMARY,
@@ -100,6 +101,7 @@ class PerLetterRtChart(QWidget):
         self._checkboxes: dict[str, QCheckBox] = {}
         self._letter_colors: dict[str, str] = {}
         self._series_cache: dict[str, list[tuple[int, list[int]]]] = {}
+        self._interactive_legend: InteractiveLegend | None = None
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -254,6 +256,7 @@ class PerLetterRtChart(QWidget):
         """Redraw visible lines across both plot panels."""
         self._plot_history.clear()
         self._plot_recent.clear()
+        self._interactive_legend = None
         sliding = self._sliding_cb.isChecked()
 
         all_run_ids = self._collect_all_run_ids()
@@ -271,6 +274,14 @@ class PerLetterRtChart(QWidget):
         self._plot_history.setVisible(has_history)
         self._break_widget.setVisible(has_history)
 
+        # Legend on the recent panel (always visible)
+        legend = self._plot_recent.addLegend(
+            offset=(-10, 10), labelTextSize="9pt", colCount=2,
+        )
+        legend.setBrush(pg.mkBrush(30, 30, 30, 180))
+
+        recent_curves: dict[str, pg.PlotDataItem] = {}
+        history_curves: dict[str, pg.PlotDataItem] = {}
         y_max = 0.0
 
         for letter, cb in self._checkboxes.items():
@@ -291,22 +302,34 @@ class PerLetterRtChart(QWidget):
 
             color = self._letter_colors.get(letter, "#cccccc")
             pen = pg.mkPen(color, width=2)
+            display_name = "Space" if letter == " " else letter
 
             # Split into history and recent segments
             if has_history:
                 h_mask = np.isin(full_x.astype(int), list(history_ids))
                 if h_mask.any():
-                    self._plot_history.plot(
+                    h_curve = self._plot_history.plot(
                         full_x[h_mask], full_y[h_mask], pen=pen
                     )
+                    history_curves[display_name] = h_curve
                     y_max = max(y_max, float(full_y[h_mask].max()))
 
             r_mask = np.isin(full_x.astype(int), list(recent_ids))
             if r_mask.any():
-                self._plot_recent.plot(
-                    full_x[r_mask], full_y[r_mask], pen=pen
+                r_curve = self._plot_recent.plot(
+                    full_x[r_mask], full_y[r_mask],
+                    pen=pen, name=display_name,
                 )
+                recent_curves[display_name] = r_curve
                 y_max = max(y_max, float(full_y[r_mask].max()))
+
+        # Interactive legend: hover highlights curves in both panels
+        if recent_curves:
+            self._interactive_legend = InteractiveLegend(
+                legend, recent_curves,
+                extra_curves=history_curves if has_history else None,
+                normal_width=2,
+            )
 
         # Synchronize Y ranges across both panels
         if y_max > 0:

@@ -33,9 +33,11 @@ from PyQt6.QtWidgets import (
 
 from typing_trainer.config import Config
 from typing_trainer.core.speed_manager import SpeedRunResult
-from typing_trainer.core.stats import RT_CAP_MS
+from typing_trainer.core.stats import RT_CAP_MS, compute_position_baselines
+from typing_trainer.models.error_types import ErrorCategory, classify_error
 from typing_trainer.models.letter_state import ErrorType
 from typing_trainer.models.run_result import RunResult
+from typing_trainer.storage.repository import Repository
 from typing_trainer.ui.theme import (
     COLOR_BG_DARK,
     COLOR_BTN_DISABLED_BG,
@@ -52,8 +54,11 @@ from typing_trainer.ui.theme import (
     make_selectable,
 )
 
-_RT_WINDOW = 10
-"""Rolling window size for the intra-run speed chart."""
+_RT_WINDOW = 1
+"""Rolling window size for the intra-run speed chart (1 = raw)."""
+
+_RT_EXCLUDE_PCT = 0
+"""Default percentage of slowest keystrokes to exclude."""
 
 
 class RunSummaryWidget(QWidget):
@@ -78,6 +83,7 @@ class RunSummaryWidget(QWidget):
         self._last_result: RunResult | None = None
         self._last_speed_result: SpeedRunResult | None = None
         self._last_settled: set[str] | None = None
+        self._last_repo: Repository | None = None
 
         self._setup_ui()
 
@@ -117,11 +123,28 @@ class RunSummaryWidget(QWidget):
         speed_controls.addWidget(win_label)
         self._rt_window_spin = QSpinBox()
         self._rt_window_spin.setFont(app_font(9))
-        self._rt_window_spin.setRange(3, 50)
+        self._rt_window_spin.setRange(1, 50)
         self._rt_window_spin.setSingleStep(1)
         self._rt_window_spin.setValue(_RT_WINDOW)
         self._rt_window_spin.valueChanged.connect(self._on_rt_window_changed)
         speed_controls.addWidget(self._rt_window_spin)
+
+        speed_controls.addSpacing(16)
+
+        excl_label = QLabel("Exclude:")
+        excl_label.setFont(app_font(9))
+        speed_controls.addWidget(excl_label)
+
+        self._rt_exclude_spin = QSpinBox()
+        self._rt_exclude_spin.setFont(app_font(9))
+        self._rt_exclude_spin.setRange(0, 30)
+        self._rt_exclude_spin.setSingleStep(1)
+        self._rt_exclude_spin.setValue(_RT_EXCLUDE_PCT)
+        self._rt_exclude_spin.setSuffix("%")
+        self._rt_exclude_spin.setToolTip("Exclude the slowest X% of keystrokes")
+        self._rt_exclude_spin.valueChanged.connect(self._on_rt_window_changed)
+        speed_controls.addWidget(self._rt_exclude_spin)
+
         speed_controls.addStretch()
         speed_layout.addLayout(speed_controls)
 
@@ -210,6 +233,7 @@ class RunSummaryWidget(QWidget):
         previous: RunResult | None = None,
         speed_result: SpeedRunResult | None = None,
         settled_letters: set[str] | None = None,
+        repo: Repository | None = None,
     ) -> None:
         """Display the run result."""
         # Title
@@ -227,12 +251,67 @@ class RunSummaryWidget(QWidget):
         lines: list[str] = []
         lines.append(f"Total keystrokes:    {result.total_keystrokes}")
         lines.append(f"Cognitive errors:    {result.cognitive_errors}")
+
+        # Sub-type breakdown of cognitive errors
+        if result.cognitive_errors > 0 and result.keystrokes:
+            cat_counts: dict[ErrorCategory, int] = {
+                "spatial": 0, "same_finger": 0, "mirror": 0, "other": 0,
+            }
+            cat_pairs: dict[ErrorCategory, list[str]] = {
+                "spatial": [], "same_finger": [], "mirror": [], "other": [],
+            }
+            swap_pairs: list[str] = []
+
+            cog_errors = [
+                ks for ks in result.keystrokes
+                if ks.error_type == ErrorType.COGNITIVE_ERROR
+                and not ks.is_backspace
+            ]
+
+            for i, ks in enumerate(cog_errors):
+                cat = classify_error(ks.expected_char, ks.actual_char)
+                cat_counts[cat] += 1
+                pair_str = f"{ks.expected_char}\u2192{ks.actual_char}"
+                if pair_str not in cat_pairs[cat]:
+                    cat_pairs[cat].append(pair_str)
+
+            # Detect swaps from full keystroke list
+            all_ks = [
+                ks for ks in result.keystrokes
+                if ks.error_type == ErrorType.COGNITIVE_ERROR
+                and not ks.is_backspace
+            ]
+            for i in range(len(all_ks) - 1):
+                a, b = all_ks[i], all_ks[i + 1]
+                if (
+                    a.expected_char == b.actual_char
+                    and a.actual_char == b.expected_char
+                ):
+                    sp = f"{a.expected_char}\u2194{b.expected_char}"
+                    if sp not in swap_pairs:
+                        swap_pairs.append(sp)
+
+            _CAT_LABELS: dict[ErrorCategory, str] = {
+                "spatial": "Spatial",
+                "same_finger": "Same finger",
+                "mirror": "Mirror",
+                "other": "Other",
+            }
+            for cat in ("spatial", "same_finger", "mirror", "other"):
+                c = cat_counts[cat]  # type: ignore[index]
+                if c > 0:
+                    pairs = cat_pairs[cat][:5]  # type: ignore[index]
+                    pair_text = f"  ({', '.join(pairs)})" if pairs else ""
+                    label = _CAT_LABELS[cat]  # type: ignore[index]
+                    lines.append(f"  {label + ':':<17s}{c}{pair_text}")
+            if swap_pairs:
+                swap_text = f"  ({', '.join(swap_pairs[:5])})"
+                lines.append(f"  {'Swaps:':<17s}{result.swap_count}{swap_text}")
+
         lines.append(f"Motor overflow:      {result.motor_overflow_errors}")
         if result.burst_repeat_count > 0:
             lines.append(f"Burst repeats:       {result.burst_repeat_count}")
         lines.append(f"Backspaces:          {result.backspace_count}")
-        if result.swap_count > 0:
-            lines.append(f"Swap errors:         {result.swap_count}")
         lines.append(f"Accuracy:            {result.accuracy:.1%}")
         lines.append(f"WPM:                 {result.wpm:.1f}")
 
@@ -289,7 +368,8 @@ class RunSummaryWidget(QWidget):
         self._last_result = result
         self._last_speed_result = speed_result
         self._last_settled = settled_letters
-        self._update_speed_chart(result, speed_result, settled_letters)
+        self._last_repo = repo
+        self._update_speed_chart(result, speed_result, settled_letters, repo)
 
         # Per-letter table
         letters = sorted(result.per_letter.keys())
@@ -332,19 +412,22 @@ class RunSummaryWidget(QWidget):
         result: RunResult,
         speed_result: SpeedRunResult | None,
         settled_letters: set[str] | None = None,
+        repo: Repository | None = None,
     ) -> None:
         """Plot rolling reaction time over keystroke position.
 
-        Three lines:
+        Three solid lines for the current run:
         - **Green** ("All"): all valid keystrokes.
-        - **Blue** ("Settled"): only keystrokes for *settled_letters*
-          (letters with >= 2000 historical keystrokes, best third by
-          accuracy).
+        - **Blue** ("Settled"): only keystrokes for *settled_letters*.
         - **Cyan** ("Space"): spacebar keystrokes only.
 
-        Red scatter dots mark positions with cognitive errors (on the
-        "All" line).  In speed mode a dashed horizontal line shows the
-        target RT.
+        Three dashed lines for the historical average (last 64 runs):
+        - **Dashed green** ("Avg All"): per-position trimmed mean.
+        - **Dashed blue** ("Avg Settled"): per-position trimmed mean,
+          smoothed with a gliding average of 5.
+        - **Dashed cyan** ("Avg Space"): same smoothing.
+
+        Red scatter dots mark cognitive error positions.
         """
         self._speed_chart.clear()
         warmup = self.config.warmup_keystrokes
@@ -390,6 +473,26 @@ class RunSummaryWidget(QWidget):
             self._speed_group.hide()
             return
         self._speed_group.show()
+
+        # ── Exclude slowest X% (per stream) ──
+        exclude_pct = self._rt_exclude_spin.value()
+        if exclude_pct > 0:
+            def _exclude(
+                positions: list[int], rts: list[float],
+            ) -> tuple[list[int], list[float]]:
+                if len(rts) < 2:
+                    return positions, rts
+                thresh = float(np.percentile(rts, 100 - exclude_pct))
+                filt = [(p, r) for p, r in zip(positions, rts) if r <= thresh]
+                return [x[0] for x in filt], [x[1] for x in filt]
+
+            all_pos, all_rt = _exclude(all_pos, all_rt)
+            settled_pos, settled_rt = _exclude(settled_pos, settled_rt)
+            space_pos, space_rt = _exclude(space_pos, space_rt)
+
+            if len(all_rt) < 2:
+                self._speed_group.hide()
+                return
 
         # ── Helper: compute rolling mean from a stream ──
         window = self._rt_window_spin.value()
@@ -459,6 +562,60 @@ class RunSummaryWidget(QWidget):
                 symbolPen=None,
             )
 
+        # ── Historical baselines (dashed lines) ──
+        if repo is not None and result.target_length > 0:
+            raw_hist = repo.get_historical_position_rts(
+                min_target_length=result.target_length, n_runs=64,
+                warmup=self.config.warmup_keystrokes,
+            )
+            if raw_hist:
+                bl_all, bl_settled, bl_space = compute_position_baselines(
+                    raw_hist, settled,
+                )
+                dash_pen_all = pg.mkPen(COLOR_SUCCESS, width=1.5)
+                dash_pen_all.setDashPattern([8, 6])
+                dash_pen_settled = pg.mkPen("#44aaff", width=1.5)
+                dash_pen_settled.setDashPattern([8, 6])
+                dash_pen_space = pg.mkPen("#44cccc", width=1.5)
+                dash_pen_space.setDashPattern([8, 6])
+
+                # All baseline — only positions present in the current run
+                run_positions = set(all_pos)
+                bl_all_pts = sorted(
+                    (p, v) for p, v in bl_all.items() if p in run_positions
+                )
+                if len(bl_all_pts) >= 2:
+                    bx = np.array([p for p, _ in bl_all_pts], dtype=np.float64)
+                    by = np.array([v for _, v in bl_all_pts], dtype=np.float64)
+                    self._speed_chart.plot(
+                        bx, by, pen=dash_pen_all, name="Avg All",
+                    )
+                    y_max = max(y_max, float(by.max()))
+
+                # Settled baseline
+                bl_set_pts = sorted(
+                    (p, v) for p, v in bl_settled.items() if p in run_positions
+                )
+                if len(bl_set_pts) >= 2:
+                    bx = np.array([p for p, _ in bl_set_pts], dtype=np.float64)
+                    by = np.array([v for _, v in bl_set_pts], dtype=np.float64)
+                    self._speed_chart.plot(
+                        bx, by, pen=dash_pen_settled, name="Avg Settled",
+                    )
+                    y_max = max(y_max, float(by.max()))
+
+                # Space baseline
+                bl_sp_pts = sorted(
+                    (p, v) for p, v in bl_space.items() if p in run_positions
+                )
+                if len(bl_sp_pts) >= 2:
+                    bx = np.array([p for p, _ in bl_sp_pts], dtype=np.float64)
+                    by = np.array([v for _, v in bl_sp_pts], dtype=np.float64)
+                    self._speed_chart.plot(
+                        bx, by, pen=dash_pen_space, name="Avg Space",
+                    )
+                    y_max = max(y_max, float(by.max()))
+
         # ── Target RT line (speed mode) ──
         if speed_result is not None and speed_result.target_wpm > 0:
             target_rt = 12000.0 / speed_result.target_wpm
@@ -484,6 +641,7 @@ class RunSummaryWidget(QWidget):
                 self._last_result,
                 self._last_speed_result,
                 self._last_settled,
+                self._last_repo,
             )
 
     def _start_rest_timer(self) -> None:

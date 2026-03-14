@@ -11,6 +11,7 @@ training.
 Filters:
   - Only letters with >= 20 total scored keystrokes are shown.
   - Only confusion pairs with >= 2 occurrences are shown.
+  - Optional recency filter: limit to last N keystrokes.
 
 Top section: horizontal bar chart of the highest confusion rates.
 Bottom section: grid heatmap (ImageItem) with letters on both axes.
@@ -23,8 +24,10 @@ import pyqtgraph as pg
 
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
+    QCheckBox,
     QHBoxLayout,
     QLabel,
+    QSpinBox,
     QSplitter,
     QVBoxLayout,
     QWidget,
@@ -62,6 +65,7 @@ _CATEGORY_LABELS: dict[ErrorCategory, str] = {
 _MAX_BAR_PAIRS = 15
 _MIN_KEYSTROKES = 20  # minimum scored keystrokes for the expected letter
 _MIN_OCCURRENCES = 2  # minimum error count for a confusion pair
+_DEFAULT_LAST_N = 2000
 
 
 class ConfusionMatrixChart(QWidget):
@@ -69,13 +73,14 @@ class ConfusionMatrixChart(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self._repo: Repository | None = None
         self._setup_ui()
 
     def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(5, 5, 5, 5)
 
-        # Legend
+        # Legend + filter row
         legend_layout = QHBoxLayout()
         legend_layout.setContentsMargins(0, 0, 0, 0)
         for cat in ("spatial", "same_finger", "mirror", "other"):
@@ -92,7 +97,24 @@ class ConfusionMatrixChart(QWidget):
             legend_layout.addWidget(swatch)
             legend_layout.addWidget(text)
             legend_layout.addSpacing(10)
+
         legend_layout.addStretch()
+
+        self._limit_cb = QCheckBox("Limit to last")
+        self._limit_cb.setFont(app_font(10))
+        self._limit_cb.setChecked(True)
+        self._limit_cb.stateChanged.connect(self._on_filter_changed)
+        legend_layout.addWidget(self._limit_cb)
+
+        self._limit_spin = QSpinBox()
+        self._limit_spin.setFont(app_font(10))
+        self._limit_spin.setRange(100, 999999)
+        self._limit_spin.setSingleStep(500)
+        self._limit_spin.setValue(_DEFAULT_LAST_N)
+        self._limit_spin.setSuffix(" keys")
+        self._limit_spin.valueChanged.connect(self._on_filter_changed)
+        legend_layout.addWidget(self._limit_spin)
+
         layout.addLayout(legend_layout)
 
         # Splitter: bar chart (top) + heatmap (bottom)
@@ -135,17 +157,37 @@ class ConfusionMatrixChart(QWidget):
 
         layout.addWidget(splitter)
 
+    def _get_last_n(self) -> int | None:
+        """Return the last_n filter value, or None if unchecked."""
+        if self._limit_cb.isChecked():
+            return self._limit_spin.value()
+        return None
+
+    def _on_filter_changed(self) -> None:
+        """Re-draw with the updated filter."""
+        self._limit_spin.setEnabled(self._limit_cb.isChecked())
+        if self._repo is not None:
+            self._redraw()
+
     def refresh(self, repo: Repository) -> None:
         """Reload data from DB and redraw both views."""
+        self._repo = repo
+        self._redraw()
+
+    def _redraw(self) -> None:
+        """Query and draw with current filter settings."""
         self._bar_plot.clear()
         self._heat_plot.clear()
+        if self._repo is None:
+            return
 
-        pairs = repo.get_confusion_pairs()
+        last_n = self._get_last_n()
+        pairs = self._repo.get_confusion_pairs(last_n=last_n)
         if not pairs:
             return
 
         # Get total keystrokes per letter for normalization
-        error_rates = repo.get_per_letter_error_rates()
+        error_rates = self._repo.get_per_letter_error_rates(last_n=last_n)
         letter_totals: dict[str, int] = {
             letter: data[1] for letter, data in error_rates.items()
         }
@@ -209,7 +251,7 @@ class ConfusionMatrixChart(QWidget):
         )
         self._bar_plot.addItem(bar)
 
-        # Y-axis tick labels: "n→e 1.3% (26×)"
+        # Y-axis tick labels: "n->e 1.3% (26x)"
         labels = []
         for expected, actual, count, rate in top:
             exp_label = "SPC" if expected == " " else expected

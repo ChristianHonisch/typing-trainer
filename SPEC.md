@@ -117,7 +117,7 @@ Each letter in the active set has one of the following states:
 - **`introducing`**: Present for < 2 sessions, **or** rolling error rate is above the accuracy threshold (> 5%). A letter stays in this state until it has both >= 2 sessions of practice AND demonstrates adequate accuracy (rolling error rate <= 5%). This prevents promotion of struggling letters.
 - **`consolidating`**: Past the introducing phase, not yet stable. Requires accuracy >= 95% across the last 3 sessions to advance to stable.
 - **`stable`**: Accuracy >= 95% across last 3 sessions. The target state.
-- **`degraded`**: Was stable, but rolling error rate has risen above 5%. Recovers to stable when rolling error rate drops to <= 4% (hysteresis gap prevents oscillation). The 4% recovery threshold = 5% entry threshold * 0.8 (configurable via `degraded_recovery_margin`).
+- **`degraded`**: Was stable or mastered, but rolling error rate has risen above 5%. Recovers to **consolidating** (not stable) when rolling error rate drops to <= 5%. The letter must then pass the normal consolidation check (3 consecutive sessions >= 95%) before reaching stable again. This provides a structural stability guarantee instead of a threshold-based hysteresis gap.
 
 This state is visible to the user at all times via a color-coded letter overview.
 
@@ -140,7 +140,7 @@ This state is visible to the user at all times via a color-coded letter overview
 - A 2-week break at mastery=1.0: drops to ~0.87 (still MASTERED)
 - A month-long break: drops below 0.8 (exits MASTERED -> STABLE)
 
-**Degradation**: MASTERED -> DEGRADED on same trigger as STABLE (rolling error > 5%). mastery_score is NOT reset — it decays naturally. mastery_qualifying_keystrokes freezes (no penalty). Recovery from DEGRADED goes to STABLE; re-entry to MASTERED happens if mastery_score is still above threshold.
+**Degradation**: MASTERED -> DEGRADED on same trigger as STABLE (rolling error > 5%). mastery_score is NOT reset — it decays naturally. mastery_qualifying_keystrokes freezes (no penalty). Recovery from DEGRADED goes to CONSOLIDATING; re-entry to STABLE happens after 3 sessions at >= 95%, then to MASTERED if mastery_score is still above threshold.
 
 **Training weight for MASTERED**: 0.5 base + bonuses. At 26 letters with 20 mastered (0.5), 5 stable (1.0), 1 introducing (4.0): the introducing letter gets ~25% share instead of ~17%.
 
@@ -499,7 +499,7 @@ All thresholds are user-configurable via JSON file. Missing keys use defaults.
 
 | Parameter | Default | Description |
 |---|---|---|
-| `degraded_recovery_margin` | 0.8 | Multiplier for DEGRADED -> STABLE recovery threshold |
+| `degraded_recovery_margin` | 0.8 | **Deprecated** — no longer used. DEGRADED recovery now goes through CONSOLIDATING at the standard accuracy threshold. |
 
 ### Mastery
 

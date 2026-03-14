@@ -5,6 +5,8 @@ error type (spatial, same-finger, mirror, other).  Total bar height
 shows the overall error rate.
 
 Sorted by error rate descending (worst letters first).
+
+An optional filter limits the data to the most recent N keystrokes.
 """
 
 from __future__ import annotations
@@ -15,7 +17,14 @@ import numpy as np
 import pyqtgraph as pg
 
 from PyQt6.QtGui import QColor
-from PyQt6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import (
+    QCheckBox,
+    QHBoxLayout,
+    QLabel,
+    QSpinBox,
+    QVBoxLayout,
+    QWidget,
+)
 
 from typing_trainer.models.error_types import ErrorCategory, classify_error
 from typing_trainer.storage.repository import Repository
@@ -47,21 +56,26 @@ _CATEGORY_LABELS: dict[ErrorCategory, str] = {
     "other": "Other",
 }
 
+_DEFAULT_LAST_N = 2000
+
 
 class ErrorHeatmap(QWidget):
     """Stacked bar chart of error rate per letter, by error type."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self._repo: Repository | None = None
         self._setup_ui()
 
     def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(5, 5, 5, 5)
 
+        # --- Filter controls ---
+        filter_layout = QHBoxLayout()
+        filter_layout.setContentsMargins(0, 0, 0, 0)
+
         # Legend
-        legend_layout = QHBoxLayout()
-        legend_layout.setContentsMargins(0, 0, 0, 0)
         for cat in _STACK_ORDER:
             color = _CATEGORY_COLORS[cat]
             label_text = _CATEGORY_LABELS[cat]
@@ -73,11 +87,28 @@ class ErrorHeatmap(QWidget):
             text = QLabel(label_text)
             text.setFont(app_font(9))
             text.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY};")
-            legend_layout.addWidget(swatch)
-            legend_layout.addWidget(text)
-            legend_layout.addSpacing(10)
-        legend_layout.addStretch()
-        layout.addLayout(legend_layout)
+            filter_layout.addWidget(swatch)
+            filter_layout.addWidget(text)
+            filter_layout.addSpacing(10)
+
+        filter_layout.addStretch()
+
+        self._limit_cb = QCheckBox("Limit to last")
+        self._limit_cb.setFont(app_font(10))
+        self._limit_cb.setChecked(True)
+        self._limit_cb.stateChanged.connect(self._on_filter_changed)
+        filter_layout.addWidget(self._limit_cb)
+
+        self._limit_spin = QSpinBox()
+        self._limit_spin.setFont(app_font(10))
+        self._limit_spin.setRange(100, 999999)
+        self._limit_spin.setSingleStep(500)
+        self._limit_spin.setValue(_DEFAULT_LAST_N)
+        self._limit_spin.setSuffix(" keys")
+        self._limit_spin.valueChanged.connect(self._on_filter_changed)
+        filter_layout.addWidget(self._limit_spin)
+
+        layout.addLayout(filter_layout)
 
         self._plot = pg.PlotWidget()
         self._plot.setBackground(COLOR_BG_DARK)
@@ -89,16 +120,36 @@ class ErrorHeatmap(QWidget):
 
         layout.addWidget(self._plot)
 
+    def _get_last_n(self) -> int | None:
+        """Return the last_n filter value, or None if unchecked."""
+        if self._limit_cb.isChecked():
+            return self._limit_spin.value()
+        return None
+
+    def _on_filter_changed(self) -> None:
+        """Re-draw with the updated filter."""
+        self._limit_spin.setEnabled(self._limit_cb.isChecked())
+        if self._repo is not None:
+            self._redraw()
+
     def refresh(self, repo: Repository) -> None:
         """Reload data from DB and redraw."""
-        self._plot.clear()
+        self._repo = repo
+        self._redraw()
 
-        error_rates = repo.get_per_letter_error_rates()
+    def _redraw(self) -> None:
+        """Query and draw with current filter settings."""
+        self._plot.clear()
+        if self._repo is None:
+            return
+
+        last_n = self._get_last_n()
+        error_rates = self._repo.get_per_letter_error_rates(last_n=last_n)
         if not error_rates:
             return
 
         # Get confusion pairs to classify error types per letter
-        confusion_pairs = repo.get_confusion_pairs()
+        confusion_pairs = self._repo.get_confusion_pairs(last_n=last_n)
 
         # Build per-letter error-type counts
         # letter -> category -> count

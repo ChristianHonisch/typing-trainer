@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QGroupBox,
@@ -129,7 +131,11 @@ class SessionDashboard(QWidget):
 
         self._session_label.setText("\n".join(lines))
 
-    def update_advancement(self, check: AdvancementCheck) -> None:
+    def update_advancement(
+        self,
+        check: AdvancementCheck,
+        error_window: dict[str, list[bool]] | None = None,
+    ) -> None:
         """Update the advancement progress display."""
         if check.next_letter is None:
             self._advance_label.setText("All letters are active!")
@@ -163,7 +169,7 @@ class SessionDashboard(QWidget):
                 f"need &ge;{req:.0%}):"
             )
             for p in check.per_letter_progress:
-                parts.append(self._format_letter_progress(p))
+                parts.append(self._format_letter_progress(p, error_window))
 
         parts.append("")
         if check.can_advance:
@@ -177,8 +183,16 @@ class SessionDashboard(QWidget):
                 blockers.append(f"{ks_need - ks} more keystrokes needed")
             for p in check.per_letter_progress:
                 if p.has_enough_data and not p.meets_accuracy:
+                    need_text = ""
+                    if error_window and p.letter in error_window:
+                        need_text = self._compute_need_text(
+                            error_window[p.letter],
+                            p.window_size,
+                            p.required_accuracy,
+                        )
                     blockers.append(
-                        f"'{p.letter}' accuracy {p.accuracy:.1%} < {p.required_accuracy:.0%}"
+                        f"'{p.letter}' accuracy {p.accuracy:.1%}"
+                        f" < {p.required_accuracy:.0%}{need_text}"
                     )
                 elif not p.has_enough_data:
                     blockers.append(
@@ -208,7 +222,40 @@ class SessionDashboard(QWidget):
         return f'<span style="color:{COLOR_ERROR};">\u2718</span>'
 
     @staticmethod
-    def _format_letter_progress(p: PerLetterProgress) -> str:
+    def _compute_need_text(
+        sequence: list[bool], window: int, required_accuracy: float,
+    ) -> str:
+        """Compute 'need N keystrokes' text from an error window sequence.
+
+        Args:
+            sequence: Boolean list (True=error), oldest-first.
+            window: Rolling window size.
+            required_accuracy: Accuracy threshold (e.g. 0.95).
+
+        Returns:
+            Formatted string like ``" (need 42 keystrokes)"`` or ``""``
+            if the letter already meets the threshold.
+        """
+        max_errors = math.floor(window * (1.0 - required_accuracy))
+        error_positions = [i for i, is_err in enumerate(sequence) if is_err]
+        n_errors = len(error_positions)
+        if n_errors <= max_errors:
+            return ""
+        excess = n_errors - max_errors
+        last_excess_pos = error_positions[excess - 1]
+        seq_len = len(sequence)
+        if seq_len >= window:
+            keystrokes_needed = last_excess_pos + 1
+        else:
+            grow_room = window - seq_len
+            keystrokes_needed = max(0, last_excess_pos + 1 - grow_room)
+        return f" (need {keystrokes_needed} keystrokes)"
+
+    @staticmethod
+    def _format_letter_progress(
+        p: PerLetterProgress,
+        error_window: dict[str, list[bool]] | None = None,
+    ) -> str:
         """Format a single letter's accuracy progress line."""
         if p.keystrokes_in_window == 0:
             color = COLOR_WARNING
@@ -221,7 +268,12 @@ class SessionDashboard(QWidget):
             detail = f"{p.accuracy:.1%}"
         else:
             color = COLOR_ERROR
-            detail = f"{p.accuracy:.1%} &lt; {p.required_accuracy:.0%}"
+            need_info = ""
+            if error_window and p.letter in error_window:
+                need_info = SessionDashboard._compute_need_text(
+                    error_window[p.letter], p.window_size, p.required_accuracy,
+                )
+            detail = f"{p.accuracy:.1%} &lt; {p.required_accuracy:.0%}{need_info}"
 
         data_info = f"({p.keystrokes_in_window}/{p.window_size})"
         return (

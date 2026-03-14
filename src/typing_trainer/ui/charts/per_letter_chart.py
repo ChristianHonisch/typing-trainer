@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
 )
 
 from typing_trainer.storage.repository import Repository
+from typing_trainer.ui.charts.interactive_legend import InteractiveLegend
 from typing_trainer.ui.theme import (
     COLOR_BG_DARK,
     COLOR_TEXT_PRIMARY,
@@ -52,6 +53,7 @@ class PerLetterChart(QWidget):
         self._repo: Repository | None = None
         self._series_cache: dict[str, list[tuple[int, float]]] = {}
         self._window = 200
+        self._interactive_legend: InteractiveLegend | None = None
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -125,6 +127,7 @@ class PerLetterChart(QWidget):
     def _redraw(self) -> None:
         """Redraw visible lines based on checkbox state."""
         self._plot.clear()
+        self._interactive_legend = None
 
         # 95% threshold
         threshold = pg.InfiniteLine(
@@ -138,6 +141,13 @@ class PerLetterChart(QWidget):
         )
         self._plot.addItem(threshold)
 
+        # Legend
+        legend = self._plot.addLegend(
+            offset=(-10, 10), labelTextSize="9pt", colCount=2,
+        )
+        legend.setBrush(pg.mkBrush(30, 30, 30, 180))
+
+        curves: dict[str, pg.PlotDataItem] = {}
         y_min = 0.9
         for letter, cb in self._checkboxes.items():
             if not cb.isChecked():
@@ -146,15 +156,22 @@ class PerLetterChart(QWidget):
             if not series:
                 continue
 
-            # Convert run_ids to sequential indices.
             # We use actual run_id as x so all letters share the same x-axis.
             x = np.array([run_id for run_id, _ in series], dtype=np.float64)
             y = np.array([acc for _, acc in series], dtype=np.float64)
 
             color = self._letter_colors.get(letter, "#cccccc")
-            self._plot.plot(x, y, pen=pg.mkPen(color, width=2))
+            display_name = "Space" if letter == " " else letter
+            pen = pg.mkPen(color, width=2)
+            curve = self._plot.plot(x, y, pen=pen, name=display_name)
+            curves[display_name] = curve
 
             if len(y) > 0:
                 y_min = min(y_min, float(y.min()))
+
+        if curves:
+            self._interactive_legend = InteractiveLegend(
+                legend, curves, normal_width=2,
+            )
 
         self._plot.getViewBox().setYRange(max(0.5, y_min - 0.05), 1.02, padding=0)

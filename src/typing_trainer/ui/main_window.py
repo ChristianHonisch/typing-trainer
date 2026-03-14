@@ -164,7 +164,7 @@ class MainWindow(QMainWindow):
         self._main_tabs.addTab(self._stack, "Training")
 
         # Tab 1: Analysis
-        self._analytics = AnalyticsWidget()
+        self._analytics = AnalyticsWidget(config=self.config)
         self._main_tabs.addTab(self._analytics, "Analysis")
 
         # Wire bigram chart selection -> run config + auto-switch to Training
@@ -322,7 +322,13 @@ class MainWindow(QMainWindow):
             ch for ch in self.letter_mgr.introduction_order
             if ch not in self._active_letters
         ]
-        self._letter_overview.update_display(self._active_letters, remaining)
+        error_rates = self.repo.get_per_letter_error_rates()
+        keystroke_counts = {
+            letter: total for letter, (_, total, _) in error_rates.items()
+        }
+        self._letter_overview.update_display(
+            self._active_letters, remaining, keystroke_counts,
+        )
 
         # Config widget letter display
         all_stable = all(
@@ -367,7 +373,16 @@ class MainWindow(QMainWindow):
         advancement = self.letter_mgr.check_advancement(
             self._active_letters, rolling_accuracy, total_keystrokes
         )
-        self._session_dashboard.update_advancement(advancement)
+        blocked_letters = [
+            p.letter for p in advancement.per_letter_progress
+            if p.has_enough_data and not p.meets_accuracy
+        ]
+        error_window: dict[str, list[bool]] = {}
+        if blocked_letters:
+            error_window = self.repo.get_per_letter_error_window(
+                blocked_letters, self.config.advancement_accuracy_window
+            )
+        self._session_dashboard.update_advancement(advancement, error_window)
 
         # Review status
         review_statuses = self.spaced_rep.get_review_status(self._active_letters)
@@ -436,7 +451,8 @@ class MainWindow(QMainWindow):
         self.engine.start_run(target_text, mode, practice_type, fail_threshold)
 
         # Create typing widget
-        typing_widget = TypingWidget(self.engine)
+        highlight_letters = self._config_widget.get_highlight_letters()
+        typing_widget = TypingWidget(self.engine, highlight_letters=highlight_letters)
         typing_widget.run_finished.connect(self._on_run_finished)
         typing_widget.run_aborted.connect(self._on_run_aborted)
 
@@ -529,7 +545,7 @@ class MainWindow(QMainWindow):
 
         # Show summary
         self._summary_widget.show_result(
-            result, previous, speed_result, settled_letters
+            result, previous, speed_result, settled_letters, repo=self.repo
         )
         self._stack.setCurrentIndex(2)
         self._summary_widget.setFocus()

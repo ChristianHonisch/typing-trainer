@@ -298,7 +298,10 @@ class TestStateTransitions:
 
         assert active["e"].state == LetterState.STABLE
 
-    def test_degraded_back_to_stable(self):
+    def test_degraded_to_consolidating(self):
+        """A degraded letter with error rate below threshold recovers to
+        CONSOLIDATING (not STABLE), requiring the normal consolidation
+        period before reaching STABLE again."""
         config = Config(advancement_accuracy=0.95)
         manager = LetterManager(config)
         active = {
@@ -306,59 +309,76 @@ class TestStateTransitions:
                 letter="e",
                 state=LetterState.DEGRADED,
                 sessions_since_introduced=10,
-                rolling_error_rate=0.03,  # 3% — below 4% recovery threshold
+                rolling_error_rate=0.03,  # 3% — below 5% threshold
             )
         }
 
         session = make_session(accuracy=0.96, per_letter_errors={"e": 0.03})
         active, warnings = manager.update_states_after_session(active, session)
 
-        # Rolling error rate below recovery threshold (4%) -> stable again
-        assert active["e"].state == LetterState.STABLE
+        assert active["e"].state == LetterState.CONSOLIDATING
 
-    def test_degraded_hysteresis_gap(self):
-        """A degraded letter in the hysteresis gap (between recovery and entry
-        thresholds) should stay degraded, even though it wouldn't trigger
-        degradation from STABLE at this rate.
-
-        Entry threshold: 5% (1 - 0.95)
-        Recovery threshold: 4% (5% * 0.8 margin)
-        Rolling error rate at 4.5% is between thresholds: stays DEGRADED.
-        """
-        config = Config(advancement_accuracy=0.95, degraded_recovery_margin=0.8)
+    def test_degraded_to_consolidating_at_threshold(self):
+        """A degraded letter exactly at the 5% threshold recovers to
+        CONSOLIDATING (error_rate <= threshold)."""
+        config = Config(advancement_accuracy=0.95)
         manager = LetterManager(config)
         active = {
             "e": LetterStats(
                 letter="e",
                 state=LetterState.DEGRADED,
                 sessions_since_introduced=10,
-                rolling_error_rate=0.045,  # 4.5% — in hysteresis gap
+                rolling_error_rate=0.05,  # exactly 5% = entry threshold
             )
         }
 
-        session = make_session(accuracy=0.955, per_letter_errors={"e": 0.045})
+        session = make_session(accuracy=0.95, per_letter_errors={"e": 0.05})
         active, warnings = manager.update_states_after_session(active, session)
 
-        # 4.5% is above recovery threshold (4%) but below entry threshold (5%)
+        assert active["e"].state == LetterState.CONSOLIDATING
+
+    def test_degraded_stays_above_threshold(self):
+        """A degraded letter with error rate above 5% stays DEGRADED."""
+        config = Config(advancement_accuracy=0.95)
+        manager = LetterManager(config)
+        active = {
+            "e": LetterStats(
+                letter="e",
+                state=LetterState.DEGRADED,
+                sessions_since_introduced=10,
+                rolling_error_rate=0.051,  # just above 5%
+            )
+        }
+
+        session = make_session(accuracy=0.949, per_letter_errors={"e": 0.051})
+        active, warnings = manager.update_states_after_session(active, session)
+
         assert active["e"].state == LetterState.DEGRADED
 
-    def test_degraded_recovers_at_recovery_threshold(self):
-        """A degraded letter exactly at the recovery threshold should recover."""
-        config = Config(advancement_accuracy=0.95, degraded_recovery_margin=0.8)
+    def test_degraded_full_recovery_path(self):
+        """DEGRADED -> CONSOLIDATING -> STABLE full recovery after 3 sessions."""
+        config = Config(advancement_accuracy=0.95)
         manager = LetterManager(config)
         active = {
             "e": LetterStats(
                 letter="e",
                 state=LetterState.DEGRADED,
                 sessions_since_introduced=10,
-                rolling_error_rate=0.04,  # exactly 4% = recovery threshold
+                rolling_error_rate=0.03,
             )
         }
 
-        session = make_session(accuracy=0.96, per_letter_errors={"e": 0.04})
-        active, warnings = manager.update_states_after_session(active, session)
+        # Session 1: recovers to CONSOLIDATING
+        session1 = make_session(accuracy=0.97, per_letter_errors={"e": 0.03})
+        active, _ = manager.update_states_after_session(active, session1)
+        assert active["e"].state == LetterState.CONSOLIDATING
 
-        # Exactly at recovery threshold -> recovers
+        # Sessions 2-4: 3 good sessions -> STABLE
+        for _ in range(3):
+            active["e"].rolling_error_rate = 0.03
+            session = make_session(accuracy=0.97, per_letter_errors={"e": 0.03})
+            active, _ = manager.update_states_after_session(active, session)
+
         assert active["e"].state == LetterState.STABLE
 
     def test_degraded_stays_degraded(self):
@@ -595,11 +615,10 @@ class TestRecheckAllStates:
         assert manager.recheck_all_states(active) is True
         assert active["e"].state == LetterState.DEGRADED
 
-    def test_degraded_recovers_to_stable(self):
-        """DEGRADED → STABLE when rolling_error_rate <= recovery threshold."""
-        config = Config(advancement_accuracy=0.95, degraded_recovery_margin=0.8)
+    def test_degraded_recovers_to_consolidating(self):
+        """DEGRADED -> CONSOLIDATING when rolling_error_rate <= entry threshold."""
+        config = Config(advancement_accuracy=0.95)
         manager = LetterManager(config)
-        # Recovery threshold = 0.05 * 0.8 = 0.04
         active = {
             "e": LetterStats(
                 letter="e",
@@ -610,17 +629,32 @@ class TestRecheckAllStates:
             ),
         }
         assert manager.recheck_all_states(active) is True
-        assert active["e"].state == LetterState.STABLE
+        assert active["e"].state == LetterState.CONSOLIDATING
 
-    def test_degraded_stays_if_not_recovered(self):
-        """DEGRADED stays DEGRADED if error rate still above recovery threshold."""
-        config = Config(advancement_accuracy=0.95, degraded_recovery_margin=0.8)
+    def test_degraded_recovers_at_exact_threshold(self):
+        """DEGRADED -> CONSOLIDATING when rolling_error_rate == 5%."""
+        config = Config(advancement_accuracy=0.95)
         manager = LetterManager(config)
         active = {
             "e": LetterStats(
                 letter="e",
                 state=LetterState.DEGRADED,
-                rolling_error_rate=0.045,
+                rolling_error_rate=0.05,
+                sessions_since_introduced=5,
+            ),
+        }
+        assert manager.recheck_all_states(active) is True
+        assert active["e"].state == LetterState.CONSOLIDATING
+
+    def test_degraded_stays_if_not_recovered(self):
+        """DEGRADED stays DEGRADED if error rate still above threshold."""
+        config = Config(advancement_accuracy=0.95)
+        manager = LetterManager(config)
+        active = {
+            "e": LetterStats(
+                letter="e",
+                state=LetterState.DEGRADED,
+                rolling_error_rate=0.051,
                 sessions_since_introduced=5,
             ),
         }

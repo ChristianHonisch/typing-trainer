@@ -468,6 +468,41 @@ class Repository:
 
         return result
 
+    def get_per_letter_error_window(
+        self, letters: list[str], window: int = 200,
+    ) -> dict[str, list[bool]]:
+        """Get the error/correct sequence for the last *window* keystrokes per letter.
+
+        Returns a dict mapping each letter to a list of booleans where
+        ``True`` = cognitive error and ``False`` = correct.  The list is
+        in **chronological** order (index 0 = oldest, last index = newest).
+
+        Only cognitive keystrokes are included (``error_type IN
+        ('correct', 'cognitive_error')``, ``is_backspace = 0``).
+        Letters with no data are omitted from the result.
+        """
+        result: dict[str, list[bool]] = {}
+        for letter in letters:
+            rows = self.db.conn.execute(
+                """SELECT error_type FROM keystrokes
+                   WHERE expected_char = ?
+                     AND error_type IN ('correct', 'cognitive_error')
+                     AND is_backspace = 0
+                   ORDER BY id DESC
+                   LIMIT ?""",
+                (letter, window),
+            ).fetchall()
+
+            if not rows:
+                continue
+
+            # rows are newest-first; reverse to oldest-first
+            result[letter] = [
+                r["error_type"] == "cognitive_error" for r in reversed(rows)
+            ]
+
+        return result
+
     def get_total_keystrokes_since(self, since_run_id: int | None = None) -> int:
         """Get total cognitive keystrokes since a given run ID (inclusive).
 
@@ -514,6 +549,55 @@ class Repository:
             for row in rows
         ]
 
+    def get_letter_count_at_runs(self) -> list[tuple[int, int]]:
+        """Get the number of unlocked letters at the end of each run.
+
+        Uses ``keystrokes_at_introduction`` from ``letter_states`` to
+        determine when each letter was introduced, and the cumulative
+        keystroke total from ``runs`` to determine how many letters were
+        active at the end of each run.
+
+        Returns:
+            List of ``(run_number, active_letter_count)`` ordered
+            chronologically.  ``run_number`` is 1-based.
+        """
+        # Introduction thresholds per letter (sorted ascending)
+        intro_rows = self.db.conn.execute(
+            """SELECT keystrokes_at_introduction
+               FROM letter_states
+               ORDER BY keystrokes_at_introduction"""
+        ).fetchall()
+        thresholds = [row["keystrokes_at_introduction"] for row in intro_rows]
+
+        if not thresholds:
+            return []
+
+        # Per-run total_keystrokes, ordered chronologically
+        run_rows = self.db.conn.execute(
+            "SELECT total_keystrokes FROM runs ORDER BY id"
+        ).fetchall()
+
+        if not run_rows:
+            return []
+
+        # Build cumulative keystroke totals per run
+        cumulative = 0
+        result: list[tuple[int, int]] = []
+        threshold_idx = 0
+        n_thresholds = len(thresholds)
+
+        for run_num_0, row in enumerate(run_rows):
+            cumulative += row["total_keystrokes"]
+            # Advance threshold pointer
+            while (
+                threshold_idx < n_thresholds
+                and thresholds[threshold_idx] <= cumulative
+            ):
+                threshold_idx += 1
+            result.append((run_num_0 + 1, threshold_idx))
+
+        return result
+
     def get_per_letter_accuracy_series(
         self, letter: str, window: int = 200
     ) -> list[tuple[int, float]]:
@@ -558,23 +642,49 @@ class Repository:
 
         return list(series.items())
 
-    def get_per_letter_error_rates(self) -> dict[str, tuple[int, int, float]]:
+    def get_per_letter_error_rates(
+        self, *, last_n: int | None = None,
+    ) -> dict[str, tuple[int, int, float]]:
         """Get aggregate error rate per letter across all keystrokes.
+
+        Args:
+            last_n: If set, only consider the most recent *last_n*
+                cognitive keystrokes (by ``id DESC``).
 
         Returns dict of ``letter -> (errors, total, error_rate)``.
         Only includes cognitive keystrokes (correct + cognitive_error).
         """
-        rows = self.db.conn.execute(
-            """SELECT expected_char AS letter,
-                      COUNT(*) AS total,
-                      SUM(CASE WHEN error_type = 'cognitive_error'
-                          THEN 1 ELSE 0 END) AS errors
-               FROM keystrokes
-               WHERE error_type IN ('correct', 'cognitive_error')
-                 AND is_backspace = 0
-               GROUP BY expected_char
-               ORDER BY expected_char"""
-        ).fetchall()
+        if last_n is not None:
+            rows = self.db.conn.execute(
+                """WITH recent AS (
+                       SELECT expected_char, error_type
+                       FROM keystrokes
+                       WHERE error_type IN ('correct', 'cognitive_error')
+                         AND is_backspace = 0
+                       ORDER BY id DESC
+                       LIMIT ?
+                   )
+                   SELECT expected_char AS letter,
+                          COUNT(*) AS total,
+                          SUM(CASE WHEN error_type = 'cognitive_error'
+                              THEN 1 ELSE 0 END) AS errors
+                   FROM recent
+                   GROUP BY expected_char
+                   ORDER BY expected_char""",
+                (last_n,),
+            ).fetchall()
+        else:
+            rows = self.db.conn.execute(
+                """SELECT expected_char AS letter,
+                          COUNT(*) AS total,
+                          SUM(CASE WHEN error_type = 'cognitive_error'
+                              THEN 1 ELSE 0 END) AS errors
+                   FROM keystrokes
+                   WHERE error_type IN ('correct', 'cognitive_error')
+                     AND is_backspace = 0
+                   GROUP BY expected_char
+                   ORDER BY expected_char"""
+            ).fetchall()
 
         result: dict[str, tuple[int, int, float]] = {}
         for row in rows:
@@ -624,71 +734,146 @@ class Repository:
             result.append((current_run, current_rts))
         return result
 
-    def get_confusion_pairs(self) -> list[tuple[str, str, int]]:
+    def get_confusion_pairs(
+        self, *, last_n: int | None = None,
+    ) -> list[tuple[str, str, int]]:
         """Get counts of each (expected, actual) confusion pair.
 
         Only includes cognitive errors (not motor overflow, burst repeat,
         or backspace corrections).
 
+        Args:
+            last_n: If set, only consider the most recent *last_n*
+                cognitive keystrokes (correct + cognitive_error, by
+                ``id DESC``).  Confusion pairs are then counted only
+                within that window.
+
         Returns:
             List of ``(expected_char, actual_char, count)`` sorted by
             count descending.
         """
-        rows = self.db.conn.execute(
-            """SELECT expected_char, actual_char, COUNT(*) AS cnt
-               FROM keystrokes
-               WHERE error_type = 'cognitive_error'
-                 AND is_backspace = 0
-               GROUP BY expected_char, actual_char
-               ORDER BY cnt DESC"""
-        ).fetchall()
+        if last_n is not None:
+            rows = self.db.conn.execute(
+                """WITH recent AS (
+                       SELECT expected_char, actual_char, error_type
+                       FROM keystrokes
+                       WHERE error_type IN ('correct', 'cognitive_error')
+                         AND is_backspace = 0
+                       ORDER BY id DESC
+                       LIMIT ?
+                   )
+                   SELECT expected_char, actual_char, COUNT(*) AS cnt
+                   FROM recent
+                   WHERE error_type = 'cognitive_error'
+                   GROUP BY expected_char, actual_char
+                   ORDER BY cnt DESC""",
+                (last_n,),
+            ).fetchall()
+        else:
+            rows = self.db.conn.execute(
+                """SELECT expected_char, actual_char, COUNT(*) AS cnt
+                   FROM keystrokes
+                   WHERE error_type = 'cognitive_error'
+                     AND is_backspace = 0
+                   GROUP BY expected_char, actual_char
+                   ORDER BY cnt DESC"""
+            ).fetchall()
 
         return [
             (row["expected_char"], row["actual_char"], row["cnt"])
             for row in rows
         ]
 
-    def get_swap_pairs(self) -> list[tuple[str, str, int]]:
+    def get_swap_pairs(
+        self, *, last_n: int | None = None,
+    ) -> list[tuple[str, str, int]]:
         """Get counts of transposition (swap) errors.
 
         A swap is two consecutive cognitive errors within the same run
         where ``expected₁ == actual₂`` and ``actual₁ == expected₂``
         (i.e. the two characters were typed in the wrong order).
 
+        Args:
+            last_n: If set, only consider the most recent *last_n*
+                cognitive keystrokes (correct + cognitive_error, by
+                ``id DESC``).  Swaps are detected only within that
+                window.
+
         Returns:
             List of ``(char_a, char_b, count)`` where ``char_a < char_b``
             alphabetically, sorted by count descending.  Each swap event
             is counted once (not twice for each keystroke in the pair).
         """
-        rows = self.db.conn.execute(
-            """WITH cognitive AS (
-                   SELECT id, run_id, expected_char, actual_char,
-                          LAG(expected_char) OVER (
-                              PARTITION BY run_id ORDER BY id
-                          ) AS prev_expected,
-                          LAG(actual_char) OVER (
-                              PARTITION BY run_id ORDER BY id
-                          ) AS prev_actual,
-                          LAG(error_type) OVER (
-                              PARTITION BY run_id ORDER BY id
-                          ) AS prev_error_type
-                   FROM keystrokes
-                   WHERE error_type = 'cognitive_error'
-                     AND is_backspace = 0
-               )
-               SELECT
-                   CASE WHEN expected_char < actual_char
-                        THEN expected_char ELSE actual_char END AS char_a,
-                   CASE WHEN expected_char < actual_char
-                        THEN actual_char ELSE expected_char END AS char_b,
-                   COUNT(*) AS cnt
-               FROM cognitive
-               WHERE prev_error_type = 'cognitive_error'
-                 AND expected_char = prev_actual
-                 AND actual_char = prev_expected
-               GROUP BY char_a, char_b
-               ORDER BY cnt DESC"""
-        ).fetchall()
+        if last_n is not None:
+            # When filtering by last_n, we need id and run_id to detect
+            # consecutive pairs within the same run.
+            rows = self.db.conn.execute(
+                """WITH recent AS (
+                       SELECT id, run_id, expected_char, actual_char, error_type
+                       FROM keystrokes
+                       WHERE error_type IN ('correct', 'cognitive_error')
+                         AND is_backspace = 0
+                       ORDER BY id DESC
+                       LIMIT ?
+                   ),
+                   cognitive AS (
+                       SELECT id, run_id, expected_char, actual_char,
+                              LAG(expected_char) OVER (
+                                  PARTITION BY run_id ORDER BY id
+                              ) AS prev_expected,
+                              LAG(actual_char) OVER (
+                                  PARTITION BY run_id ORDER BY id
+                              ) AS prev_actual,
+                              LAG(error_type) OVER (
+                                  PARTITION BY run_id ORDER BY id
+                              ) AS prev_error_type
+                       FROM recent
+                       WHERE error_type = 'cognitive_error'
+                   )
+                   SELECT
+                       CASE WHEN expected_char < actual_char
+                            THEN expected_char ELSE actual_char END AS char_a,
+                       CASE WHEN expected_char < actual_char
+                            THEN actual_char ELSE expected_char END AS char_b,
+                       COUNT(*) AS cnt
+                   FROM cognitive
+                   WHERE prev_error_type = 'cognitive_error'
+                     AND expected_char = prev_actual
+                     AND actual_char = prev_expected
+                   GROUP BY char_a, char_b
+                   ORDER BY cnt DESC""",
+                (last_n,),
+            ).fetchall()
+        else:
+            rows = self.db.conn.execute(
+                """WITH cognitive AS (
+                       SELECT id, run_id, expected_char, actual_char,
+                              LAG(expected_char) OVER (
+                                  PARTITION BY run_id ORDER BY id
+                              ) AS prev_expected,
+                              LAG(actual_char) OVER (
+                                  PARTITION BY run_id ORDER BY id
+                              ) AS prev_actual,
+                              LAG(error_type) OVER (
+                                  PARTITION BY run_id ORDER BY id
+                              ) AS prev_error_type
+                       FROM keystrokes
+                       WHERE error_type = 'cognitive_error'
+                         AND is_backspace = 0
+                   )
+                   SELECT
+                       CASE WHEN expected_char < actual_char
+                            THEN expected_char ELSE actual_char END AS char_a,
+                       CASE WHEN expected_char < actual_char
+                            THEN actual_char ELSE expected_char END AS char_b,
+                       COUNT(*) AS cnt
+                   FROM cognitive
+                   WHERE prev_error_type = 'cognitive_error'
+                     AND expected_char = prev_actual
+                     AND actual_char = prev_expected
+                   GROUP BY char_a, char_b
+                   ORDER BY cnt DESC"""
+            ).fetchall()
 
         return [
             (row["char_a"], row["char_b"], row["cnt"])
@@ -726,6 +911,126 @@ class Repository:
 
         return [
             (row["bucket_start"], row["errors"], row["total"])
+            for row in rows
+        ]
+
+    def get_historical_position_rts(
+        self,
+        min_target_length: int,
+        n_runs: int = 64,
+        warmup: int = 3,
+    ) -> list[tuple[int, str, float]]:
+        """Get per-position reaction times from recent qualifying runs.
+
+        Returns ``(position, expected_char, reaction_time_ms)`` for every
+        valid keystroke in the most recent *n_runs* runs whose
+        ``target_length >= min_target_length``.
+
+        Filters applied:
+        - ``is_backspace = 0``
+        - ``error_type`` not in (``motor_overflow``, ``burst_repeat``)
+        - ``reaction_time_ms`` is not NULL and ``<= RT_CAP_MS``
+        - ``position >= warmup``
+
+        Results are **not** ordered in any particular way; callers should
+        group by position themselves.
+        """
+        rows = self.db.conn.execute(
+            """SELECT k.position, k.expected_char, k.reaction_time_ms
+               FROM keystrokes k
+               JOIN (
+                   SELECT id FROM runs
+                   WHERE target_length >= ?
+                   ORDER BY id DESC
+                   LIMIT ?
+               ) AS recent ON recent.id = k.run_id
+               WHERE k.is_backspace = 0
+                 AND k.error_type NOT IN ('motor_overflow', 'burst_repeat')
+                 AND k.reaction_time_ms IS NOT NULL
+                 AND k.reaction_time_ms <= ?
+                 AND k.position >= ?""",
+            (min_target_length, n_runs, RT_CAP_MS, warmup),
+        ).fetchall()
+        return [
+            (row["position"], row["expected_char"], float(row["reaction_time_ms"]))
+            for row in rows
+        ]
+
+    def get_per_letter_occurrence_series(
+        self,
+    ) -> list[tuple[int, dict[str, float]]]:
+        """Get per-letter occurrence percentage for each run.
+
+        For every run, returns the percentage of keystrokes targeting each
+        letter.  Only counts non-backspace keystrokes with ``error_type``
+        in (``correct``, ``cognitive_error``) — i.e. the intended text
+        distribution, excluding motor overflow and burst repeat.
+
+        Returns:
+            List of ``(run_id, {letter: percentage})`` ordered by run_id.
+            Percentages are 0–100.
+        """
+        rows = self.db.conn.execute(
+            """SELECT run_id, expected_char, COUNT(*) AS cnt
+               FROM keystrokes
+               WHERE is_backspace = 0
+                 AND error_type IN ('correct', 'cognitive_error')
+               GROUP BY run_id, expected_char
+               ORDER BY run_id""",
+        ).fetchall()
+
+        # Build per-run totals and per-letter counts
+        from collections import defaultdict
+
+        run_letter_counts: dict[int, dict[str, int]] = defaultdict(dict)
+        run_totals: dict[int, int] = defaultdict(int)
+        for row in rows:
+            rid = row["run_id"]
+            char = row["expected_char"]
+            cnt = row["cnt"]
+            run_letter_counts[rid][char] = cnt
+            run_totals[rid] += cnt
+
+        result: list[tuple[int, dict[str, float]]] = []
+        for rid in sorted(run_letter_counts):
+            total = run_totals[rid]
+            if total == 0:
+                continue
+            pcts = {
+                char: cnt / total * 100.0
+                for char, cnt in run_letter_counts[rid].items()
+            }
+            result.append((rid, pcts))
+        return result
+
+    def get_error_timeline(
+        self,
+    ) -> list[tuple[int, str, str, str, int, int]]:
+        """Get all error keystrokes across all runs for timeline charting.
+
+        Returns a list of
+        ``(run_id, expected_char, actual_char, error_type, position, target_length)``
+        for every non-backspace keystroke where ``error_type != 'correct'``,
+        ordered chronologically (by ``run_id``, then ``position``).
+        """
+        rows = self.db.conn.execute(
+            """SELECT k.run_id, k.expected_char, k.actual_char,
+                      k.error_type, k.position, r.target_length
+               FROM keystrokes k
+               JOIN runs r ON r.id = k.run_id
+               WHERE k.error_type != 'correct'
+                 AND k.is_backspace = 0
+               ORDER BY k.run_id, k.position""",
+        ).fetchall()
+        return [
+            (
+                row["run_id"],
+                row["expected_char"],
+                row["actual_char"],
+                row["error_type"],
+                row["position"],
+                row["target_length"],
+            )
             for row in rows
         ]
 
