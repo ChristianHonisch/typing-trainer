@@ -33,6 +33,7 @@ from PyQt6.QtWidgets import (
 
 from typing_trainer.config import Config
 from typing_trainer.core.speed_manager import SpeedRunResult
+from typing_trainer.models.letter_state import DisplayMode
 from typing_trainer.core.stats import RT_CAP_MS, compute_position_baselines
 from typing_trainer.models.error_types import ErrorCategory, classify_error
 from typing_trainer.models.letter_state import ErrorType
@@ -85,6 +86,9 @@ class RunSummaryWidget(QWidget):
         self._last_settled: set[str] | None = None
         self._last_repo: Repository | None = None
 
+        # Display mode (controls which sections are visible)
+        self._display_mode = DisplayMode.NERD
+
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -99,15 +103,15 @@ class RunSummaryWidget(QWidget):
         layout.addWidget(self._title)
 
         # Aggregate stats
-        stats_group = QGroupBox("Summary")
-        stats_group.setFont(app_font(11))
-        stats_layout = QVBoxLayout(stats_group)
+        self._stats_group = QGroupBox("Summary")
+        self._stats_group.setFont(app_font(11))
+        stats_layout = QVBoxLayout(self._stats_group)
         self._stats_label = QLabel()
         self._stats_label.setFont(app_font(13))
         self._stats_label.setTextFormat(Qt.TextFormat.RichText)
         make_selectable(self._stats_label)
         stats_layout.addWidget(self._stats_label)
-        layout.addWidget(stats_group)
+        layout.addWidget(self._stats_group)
 
         # Intra-run speed chart
         speed_group = QGroupBox("Typing Speed")
@@ -151,12 +155,8 @@ class RunSummaryWidget(QWidget):
         self._speed_chart = pg.PlotWidget()
         self._speed_chart.setBackground(COLOR_BG_DARK)
         self._speed_chart.showGrid(x=True, y=True, alpha=0.15)
-        self._speed_chart.setLabel(
-            "left", "RT (ms)", color=COLOR_TEXT_PRIMARY
-        )
-        self._speed_chart.setLabel(
-            "bottom", "Position", color=COLOR_TEXT_PRIMARY
-        )
+        self._speed_chart.setLabel("left", "RT (ms)", color=COLOR_TEXT_PRIMARY)
+        self._speed_chart.setLabel("bottom", "Position", color=COLOR_TEXT_PRIMARY)
         self._speed_chart.getAxis("left").setTextPen(COLOR_TEXT_SECONDARY)
         self._speed_chart.getAxis("bottom").setTextPen(COLOR_TEXT_SECONDARY)
         self._speed_chart.setMinimumHeight(150)
@@ -166,9 +166,9 @@ class RunSummaryWidget(QWidget):
         layout.addWidget(speed_group, stretch=1)
 
         # Per-letter table
-        letter_group = QGroupBox("Per-Letter Breakdown")
-        letter_group.setFont(app_font(11))
-        letter_layout = QVBoxLayout(letter_group)
+        self._letter_group = QGroupBox("Per-Letter Breakdown")
+        self._letter_group.setFont(app_font(11))
+        letter_layout = QVBoxLayout(self._letter_group)
 
         self._letter_table = QTableWidget()
         self._letter_table.setFont(app_font(11))
@@ -178,17 +178,11 @@ class RunSummaryWidget(QWidget):
         )
         header = self._letter_table.horizontalHeader()
         assert header is not None
-        header.setSectionResizeMode(
-            QHeaderView.ResizeMode.Stretch
-        )
-        self._letter_table.setEditTriggers(
-            QTableWidget.EditTrigger.NoEditTriggers
-        )
-        self._letter_table.setSelectionMode(
-            QTableWidget.SelectionMode.NoSelection
-        )
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self._letter_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._letter_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         letter_layout.addWidget(self._letter_table)
-        layout.addWidget(letter_group)
+        layout.addWidget(self._letter_group)
 
         # Rest timer and buttons
         bottom_layout = QHBoxLayout()
@@ -227,6 +221,21 @@ class RunSummaryWidget(QWidget):
 
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
+    def set_display_mode(self, mode: DisplayMode) -> None:
+        """Control which sections are visible based on display mode.
+
+        - BASIC: only the Summary box (+ rest timer / continue)
+        - NERD: Summary + Per-Letter table
+        - EXTREME_NERD: Summary + Per-Letter table + Typing Speed chart
+        """
+        self._display_mode = mode
+        self._letter_group.setVisible(mode != DisplayMode.BASIC)
+        # Speed group visibility is also gated by data availability in
+        # _draw_speed_chart, so we just record the mode here; the chart
+        # drawing method will respect it.
+        if mode != DisplayMode.EXTREME_NERD:
+            self._speed_group.hide()
+
     def show_result(
         self,
         result: RunResult,
@@ -255,17 +264,23 @@ class RunSummaryWidget(QWidget):
         # Sub-type breakdown of cognitive errors
         if result.cognitive_errors > 0 and result.keystrokes:
             cat_counts: dict[ErrorCategory, int] = {
-                "spatial": 0, "same_finger": 0, "mirror": 0, "other": 0,
+                "spatial": 0,
+                "same_finger": 0,
+                "mirror": 0,
+                "other": 0,
             }
             cat_pairs: dict[ErrorCategory, list[str]] = {
-                "spatial": [], "same_finger": [], "mirror": [], "other": [],
+                "spatial": [],
+                "same_finger": [],
+                "mirror": [],
+                "other": [],
             }
             swap_pairs: list[str] = []
 
             cog_errors = [
-                ks for ks in result.keystrokes
-                if ks.error_type == ErrorType.COGNITIVE_ERROR
-                and not ks.is_backspace
+                ks
+                for ks in result.keystrokes
+                if ks.error_type == ErrorType.COGNITIVE_ERROR and not ks.is_backspace
             ]
 
             for i, ks in enumerate(cog_errors):
@@ -277,9 +292,9 @@ class RunSummaryWidget(QWidget):
 
             # Detect swaps from full keystroke list
             all_ks = [
-                ks for ks in result.keystrokes
-                if ks.error_type == ErrorType.COGNITIVE_ERROR
-                and not ks.is_backspace
+                ks
+                for ks in result.keystrokes
+                if ks.error_type == ErrorType.COGNITIVE_ERROR and not ks.is_backspace
             ]
             for i in range(len(all_ks) - 1):
                 a, b = all_ks[i], all_ks[i + 1]
@@ -317,9 +332,7 @@ class RunSummaryWidget(QWidget):
 
         # Duration
         if result.start_time is not None and result.end_time is not None:
-            duration_s = int(
-                (result.end_time - result.start_time).total_seconds()
-            )
+            duration_s = int((result.end_time - result.start_time).total_seconds())
             if duration_s >= 60:
                 lines.append(
                     f"Duration:            {duration_s // 60}m {duration_s % 60:02d}s"
@@ -333,14 +346,22 @@ class RunSummaryWidget(QWidget):
             lines.append(f"--- Speed Training ---")
             lines.append(f"Target WPM:          {speed_result.target_wpm:.0f}")
             lines.append(f"Achieved WPM:        {speed_result.achieved_wpm:.1f}")
-            passed_text = f'<span style="color:{COLOR_SUCCESS}">PASSED</span>' if speed_result.passed else f'<span style="color:{COLOR_ERROR}">FAILED</span>'
+            passed_text = (
+                f'<span style="color:{COLOR_SUCCESS}">PASSED</span>'
+                if speed_result.passed
+                else f'<span style="color:{COLOR_ERROR}">FAILED</span>'
+            )
             lines.append(f"Result:              {passed_text}")
             lines.append(f"New target WPM:      {speed_result.new_target_wpm:.0f}")
             if speed_result.run_median_rt_ms > 0:
-                lines.append(f"Median RT:           {speed_result.run_median_rt_ms:.0f} ms")
+                lines.append(
+                    f"Median RT:           {speed_result.run_median_rt_ms:.0f} ms"
+                )
 
             # Speed bottlenecks
-            bottlenecks = [d for d in speed_result.per_key_diagnostics if d.is_bottleneck]
+            bottlenecks = [
+                d for d in speed_result.per_key_diagnostics if d.is_bottleneck
+            ]
             if bottlenecks:
                 lines.append("")
                 lines.append("Speed bottlenecks (> 1.5x median):")
@@ -357,7 +378,7 @@ class RunSummaryWidget(QWidget):
             wpm_sign = "+" if wpm_delta >= 0 else ""
             lines.append("")
             lines.append(
-                f'vs previous run:     '
+                f"vs previous run:     "
                 f'<span style="color:{acc_color}">{acc_sign}{acc_delta:.1%}</span> accuracy, '
                 f'<span style="color:{wpm_color}">{wpm_sign}{wpm_delta:.1f}</span> WPM'
             )
@@ -472,13 +493,19 @@ class RunSummaryWidget(QWidget):
         if len(all_rt) < 2:
             self._speed_group.hide()
             return
+        # Only show in Extreme Nerd mode
+        if self._display_mode != DisplayMode.EXTREME_NERD:
+            self._speed_group.hide()
+            return
         self._speed_group.show()
 
         # ── Exclude slowest X% (per stream) ──
         exclude_pct = self._rt_exclude_spin.value()
         if exclude_pct > 0:
+
             def _exclude(
-                positions: list[int], rts: list[float],
+                positions: list[int],
+                rts: list[float],
             ) -> tuple[list[int], list[float]]:
                 if len(rts) < 2:
                     return positions, rts
@@ -513,9 +540,7 @@ class RunSummaryWidget(QWidget):
             )
 
         # ── Legend ──
-        legend = self._speed_chart.addLegend(
-            offset=(-10, 10), labelTextSize="9pt"
-        )
+        legend = self._speed_chart.addLegend(offset=(-10, 10), labelTextSize="9pt")
         legend.setBrush(pg.mkBrush(30, 30, 30, 180))
 
         y_max = 0.0
@@ -565,12 +590,14 @@ class RunSummaryWidget(QWidget):
         # ── Historical baselines (dashed lines) ──
         if repo is not None and result.target_length > 0:
             raw_hist = repo.get_historical_position_rts(
-                min_target_length=result.target_length, n_runs=64,
+                min_target_length=result.target_length,
+                n_runs=64,
                 warmup=self.config.warmup_keystrokes,
             )
             if raw_hist:
                 bl_all, bl_settled, bl_space = compute_position_baselines(
-                    raw_hist, settled,
+                    raw_hist,
+                    settled,
                 )
                 dash_pen_all = pg.mkPen(COLOR_SUCCESS, width=1.5)
                 dash_pen_all.setDashPattern([8, 6])
@@ -588,7 +615,10 @@ class RunSummaryWidget(QWidget):
                     bx = np.array([p for p, _ in bl_all_pts], dtype=np.float64)
                     by = np.array([v for _, v in bl_all_pts], dtype=np.float64)
                     self._speed_chart.plot(
-                        bx, by, pen=dash_pen_all, name="Avg All",
+                        bx,
+                        by,
+                        pen=dash_pen_all,
+                        name="Avg All",
                     )
                     y_max = max(y_max, float(by.max()))
 
@@ -600,7 +630,10 @@ class RunSummaryWidget(QWidget):
                     bx = np.array([p for p, _ in bl_set_pts], dtype=np.float64)
                     by = np.array([v for _, v in bl_set_pts], dtype=np.float64)
                     self._speed_chart.plot(
-                        bx, by, pen=dash_pen_settled, name="Avg Settled",
+                        bx,
+                        by,
+                        pen=dash_pen_settled,
+                        name="Avg Settled",
                     )
                     y_max = max(y_max, float(by.max()))
 
@@ -612,7 +645,10 @@ class RunSummaryWidget(QWidget):
                     bx = np.array([p for p, _ in bl_sp_pts], dtype=np.float64)
                     by = np.array([v for _, v in bl_sp_pts], dtype=np.float64)
                     self._speed_chart.plot(
-                        bx, by, pen=dash_pen_space, name="Avg Space",
+                        bx,
+                        by,
+                        pen=dash_pen_space,
+                        name="Avg Space",
                     )
                     y_max = max(y_max, float(by.max()))
 
@@ -630,9 +666,7 @@ class RunSummaryWidget(QWidget):
 
         # ── Y range ──
         if y_max > 0:
-            self._speed_chart.getViewBox().setYRange(
-                0, y_max * 1.15, padding=0
-            )
+            self._speed_chart.getViewBox().setYRange(0, y_max * 1.15, padding=0)
 
     def _on_rt_window_changed(self) -> None:
         """Redraw the speed chart with the new rolling window size."""
@@ -658,9 +692,7 @@ class RunSummaryWidget(QWidget):
 
     def _update_rest_display(self) -> None:
         if self._rest_remaining > 0:
-            self._rest_label.setText(
-                f"Suggested rest: {self._rest_remaining}s"
-            )
+            self._rest_label.setText(f"Suggested rest: {self._rest_remaining}s")
             self._rest_label.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY};")
         else:
             self._rest_label.setText("Rest complete")

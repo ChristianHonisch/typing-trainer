@@ -167,9 +167,7 @@ class Repository:
         self.db.conn.commit()
         return run_id
 
-    def _save_keystrokes(
-        self, run_id: int, keystrokes: list[KeystrokeEvent]
-    ) -> None:
+    def _save_keystrokes(self, run_id: int, keystrokes: list[KeystrokeEvent]) -> None:
         """Batch-insert keystrokes for a run.
 
         The ``prev_char`` column is set to NULL for all new keystrokes.
@@ -437,6 +435,128 @@ class Repository:
         ).fetchone()
         return int(row["total_s"])
 
+    def get_total_runs(self) -> int:
+        """Get total number of runs across all sessions."""
+        row = self.db.conn.execute("SELECT COUNT(*) AS c FROM runs").fetchone()
+        return row["c"]
+
+    def get_runs_today(self) -> int:
+        """Get number of runs started today (local time)."""
+        row = self.db.conn.execute(
+            """SELECT COUNT(*) AS c FROM runs
+               WHERE date(start_time, 'localtime') = date('now', 'localtime')"""
+        ).fetchone()
+        return row["c"]
+
+    def get_keystrokes_today(self) -> int:
+        """Get total cognitive keystrokes from runs started today."""
+        row = self.db.conn.execute(
+            """SELECT COALESCE(SUM(total_keystrokes), 0) AS total
+               FROM runs
+               WHERE date(start_time, 'localtime') = date('now', 'localtime')"""
+        ).fetchone()
+        return row["total"]
+
+    def get_total_training_time(self) -> int:
+        """Total active training seconds across all runs (sum of run durations)."""
+        row = self.db.conn.execute(
+            """SELECT COALESCE(SUM(
+                 (julianday(end_time) - julianday(start_time)) * 86400
+               ), 0) AS total_s
+               FROM runs
+               WHERE end_time IS NOT NULL"""
+        ).fetchone()
+        return int(row["total_s"])
+
+    def get_elapsed_time_today(self) -> int:
+        """Wall-clock elapsed seconds for sessions with runs today.
+
+        For each session that has at least one run today, computes the
+        span from the session's start_time to either its end_time or
+        the latest run end_time today.
+        """
+        row = self.db.conn.execute(
+            """SELECT COALESCE(SUM(span), 0) AS total_s
+               FROM (
+                   SELECT
+                       (julianday(
+                           COALESCE(s.end_time, MAX(r.end_time))
+                       ) - julianday(s.start_time)) * 86400 AS span
+                   FROM sessions s
+                   JOIN runs r ON r.session_id = s.id
+                   WHERE date(r.start_time, 'localtime') = date('now', 'localtime')
+                     AND r.end_time IS NOT NULL
+                   GROUP BY s.id
+               )"""
+        ).fetchone()
+        return max(0, int(row["total_s"]))
+
+    def get_total_elapsed_time(self) -> int:
+        """Total wall-clock elapsed seconds across all sessions.
+
+        For each session, computes the span from start_time to end_time.
+        Sessions without end_time are excluded.
+        """
+        row = self.db.conn.execute(
+            """SELECT COALESCE(SUM(
+                 (julianday(end_time) - julianday(start_time)) * 86400
+               ), 0) AS total_s
+               FROM sessions
+               WHERE end_time IS NOT NULL"""
+        ).fetchone()
+        return max(0, int(row["total_s"]))
+
+    def get_total_keystrokes_relearning(self) -> int:
+        """Get total cognitive keystrokes from Learn Keys runs only.
+
+        Learn Keys = ``mode='relearning'`` AND ``practice_type='random_strings'``.
+        Fix Keys runs (``practice_type='fix_keys'``) are excluded because
+        only Learn Keys training counts toward letter unlocking.
+        """
+        row = self.db.conn.execute(
+            """SELECT COALESCE(SUM(total_keystrokes), 0) AS total
+               FROM runs
+               WHERE mode = 'relearning'
+                 AND practice_type = 'random_strings'"""
+        ).fetchone()
+        return row["total"]
+
+    def get_per_letter_rolling_accuracy_relearning(
+        self, letters: list[str], window: int = 200
+    ) -> dict[str, tuple[float, int]]:
+        """Rolling accuracy per letter, counting only Learn Keys keystrokes.
+
+        Same semantics as :meth:`get_per_letter_rolling_accuracy` but
+        restricted to keystrokes from Learn Keys runs
+        (``mode='relearning'`` AND ``practice_type='random_strings'``).
+        Fix Keys runs are excluded.
+        """
+        result: dict[str, tuple[float, int]] = {}
+        for letter in letters:
+            rows = self.db.conn.execute(
+                """SELECT k.error_type FROM keystrokes k
+                   JOIN runs r ON k.run_id = r.id
+                   WHERE k.expected_char = ?
+                     AND k.error_type IN ('correct', 'cognitive_error')
+                     AND k.is_backspace = 0
+                     AND r.mode = 'relearning'
+                     AND r.practice_type = 'random_strings'
+                   ORDER BY k.id DESC
+                   LIMIT ?""",
+                (letter, window),
+            ).fetchall()
+
+            total = len(rows)
+            if total == 0:
+                result[letter] = (1.0, 0)
+                continue
+
+            errors = sum(1 for r in rows if r["error_type"] == "cognitive_error")
+            accuracy = (total - errors) / total
+            result[letter] = (accuracy, total)
+
+        return result
+
     def get_per_letter_rolling_accuracy(
         self, letters: list[str], window: int = 200
     ) -> dict[str, tuple[float, int]]:
@@ -469,7 +589,11 @@ class Repository:
         return result
 
     def get_per_letter_error_window(
-        self, letters: list[str], window: int = 200,
+        self,
+        letters: list[str],
+        window: int = 200,
+        *,
+        learn_keys_only: bool = False,
     ) -> dict[str, list[bool]]:
         """Get the error/correct sequence for the last *window* keystrokes per letter.
 
@@ -480,18 +604,37 @@ class Repository:
         Only cognitive keystrokes are included (``error_type IN
         ('correct', 'cognitive_error')``, ``is_backspace = 0``).
         Letters with no data are omitted from the result.
+
+        Args:
+            learn_keys_only: When ``True``, restrict to keystrokes from
+                Learn Keys runs (``mode='relearning'`` AND
+                ``practice_type='random_strings'``).
         """
         result: dict[str, list[bool]] = {}
         for letter in letters:
-            rows = self.db.conn.execute(
-                """SELECT error_type FROM keystrokes
-                   WHERE expected_char = ?
-                     AND error_type IN ('correct', 'cognitive_error')
-                     AND is_backspace = 0
-                   ORDER BY id DESC
-                   LIMIT ?""",
-                (letter, window),
-            ).fetchall()
+            if learn_keys_only:
+                rows = self.db.conn.execute(
+                    """SELECT k.error_type FROM keystrokes k
+                       JOIN runs r ON k.run_id = r.id
+                       WHERE k.expected_char = ?
+                         AND k.error_type IN ('correct', 'cognitive_error')
+                         AND k.is_backspace = 0
+                         AND r.mode = 'relearning'
+                         AND r.practice_type = 'random_strings'
+                       ORDER BY k.id DESC
+                       LIMIT ?""",
+                    (letter, window),
+                ).fetchall()
+            else:
+                rows = self.db.conn.execute(
+                    """SELECT error_type FROM keystrokes
+                       WHERE expected_char = ?
+                         AND error_type IN ('correct', 'cognitive_error')
+                         AND is_backspace = 0
+                       ORDER BY id DESC
+                       LIMIT ?""",
+                    (letter, window),
+                ).fetchall()
 
             if not rows:
                 continue
@@ -502,6 +645,22 @@ class Repository:
             ]
 
         return result
+
+    def get_per_letter_run_counts(self) -> dict[str, int]:
+        """Get the number of distinct runs each letter appeared in.
+
+        Only counts cognitive keystrokes (correct + cognitive_error).
+        Returns ``{letter: run_count}``.
+        """
+        rows = self.db.conn.execute(
+            """SELECT expected_char AS letter,
+                      COUNT(DISTINCT run_id) AS run_count
+               FROM keystrokes
+               WHERE error_type IN ('correct', 'cognitive_error')
+                 AND is_backspace = 0
+               GROUP BY expected_char"""
+        ).fetchall()
+        return {row["letter"]: row["run_count"] for row in rows}
 
     def get_total_keystrokes_since(self, since_run_id: int | None = None) -> int:
         """Get total cognitive keystrokes since a given run ID (inclusive).
@@ -590,8 +749,7 @@ class Repository:
             cumulative += row["total_keystrokes"]
             # Advance threshold pointer
             while (
-                threshold_idx < n_thresholds
-                and thresholds[threshold_idx] <= cumulative
+                threshold_idx < n_thresholds and thresholds[threshold_idx] <= cumulative
             ):
                 threshold_idx += 1
             result.append((run_num_0 + 1, threshold_idx))
@@ -643,7 +801,9 @@ class Repository:
         return list(series.items())
 
     def get_per_letter_error_rates(
-        self, *, last_n: int | None = None,
+        self,
+        *,
+        last_n: int | None = None,
     ) -> dict[str, tuple[int, int, float]]:
         """Get aggregate error rate per letter across all keystrokes.
 
@@ -694,9 +854,7 @@ class Repository:
             result[row["letter"]] = (errors, total, rate)
         return result
 
-    def get_per_letter_rt_series(
-        self, letter: str
-    ) -> list[tuple[int, list[int]]]:
+    def get_per_letter_rt_series(self, letter: str) -> list[tuple[int, list[int]]]:
         """Get raw reaction times per run for a letter.
 
         Returns ``(run_id, [rt_ms, ...])`` for each run where the letter
@@ -735,7 +893,9 @@ class Repository:
         return result
 
     def get_confusion_pairs(
-        self, *, last_n: int | None = None,
+        self,
+        *,
+        last_n: int | None = None,
     ) -> list[tuple[str, str, int]]:
         """Get counts of each (expected, actual) confusion pair.
 
@@ -779,13 +939,12 @@ class Repository:
                    ORDER BY cnt DESC"""
             ).fetchall()
 
-        return [
-            (row["expected_char"], row["actual_char"], row["cnt"])
-            for row in rows
-        ]
+        return [(row["expected_char"], row["actual_char"], row["cnt"]) for row in rows]
 
     def get_swap_pairs(
-        self, *, last_n: int | None = None,
+        self,
+        *,
+        last_n: int | None = None,
     ) -> list[tuple[str, str, int]]:
         """Get counts of transposition (swap) errors.
 
@@ -875,10 +1034,7 @@ class Repository:
                    ORDER BY cnt DESC"""
             ).fetchall()
 
-        return [
-            (row["char_a"], row["char_b"], row["cnt"])
-            for row in rows
-        ]
+        return [(row["char_a"], row["char_b"], row["cnt"]) for row in rows]
 
     def get_error_rate_by_position(
         self, bucket_size: int = 5
@@ -909,10 +1065,7 @@ class Repository:
             (bucket_size, bucket_size),
         ).fetchall()
 
-        return [
-            (row["bucket_start"], row["errors"], row["total"])
-            for row in rows
-        ]
+        return [(row["bucket_start"], row["errors"], row["total"]) for row in rows]
 
     def get_historical_position_rts(
         self,
@@ -1441,9 +1594,7 @@ class Repository:
             for row in rows:
                 letter = row["expected_char"]
                 if letter in letter_session_data:
-                    letter_session_data[letter].append(
-                        (sid, end_time, row["cnt"])
-                    )
+                    letter_session_data[letter].append((sid, end_time, row["cnt"]))
 
         # Build rolling accuracy buffers per letter and compute mastery
         for letter, stats in letter_states.items():
@@ -1479,9 +1630,7 @@ class Repository:
                     # Emit the previous session boundary
                     if current_sid is not None and len(buf) > 0:
                         acc = (len(buf) - errors_in_buf) / len(buf)
-                        session_boundaries.append(
-                            (current_sid, acc, session_ks_count)
-                        )
+                        session_boundaries.append((current_sid, acc, session_ks_count))
                     current_sid = sid
                     session_ks_count = 0
 
@@ -1498,9 +1647,7 @@ class Repository:
             # Emit last session boundary
             if current_sid is not None and len(buf) > 0:
                 acc = (len(buf) - errors_in_buf) / len(buf)
-                session_boundaries.append(
-                    (current_sid, acc, session_ks_count)
-                )
+                session_boundaries.append((current_sid, acc, session_ks_count))
 
             # Now compute mastery by walking session boundaries
             mastery_score = 0.0
@@ -1524,19 +1671,12 @@ class Repository:
                         current_end - prev_end_time
                     ).total_seconds() / 3600.0
                     if hours_elapsed > 0 and mastery_score > 0:
-                        half_life_days = (
-                            mastery_half_life_min_days
-                            + mastery_score
-                            * (
-                                mastery_half_life_max_days
-                                - mastery_half_life_min_days
-                            )
+                        half_life_days = mastery_half_life_min_days + mastery_score * (
+                            mastery_half_life_max_days - mastery_half_life_min_days
                         )
                         half_life_hours = half_life_days * 24.0
                         decay_constant = math.log(2) / half_life_hours
-                        mastery_score *= math.exp(
-                            -decay_constant * hours_elapsed
-                        )
+                        mastery_score *= math.exp(-decay_constant * hours_elapsed)
 
                 # Check qualifying condition
                 if (
@@ -1554,33 +1694,21 @@ class Repository:
             if prev_end_time is not None and mastery_score > 0:
                 from datetime import datetime as _dt
 
-                hours_since = (
-                    _dt.now() - prev_end_time
-                ).total_seconds() / 3600.0
+                hours_since = (_dt.now() - prev_end_time).total_seconds() / 3600.0
                 if hours_since > 0:
-                    half_life_days = (
-                        mastery_half_life_min_days
-                        + mastery_score
-                        * (
-                            mastery_half_life_max_days
-                            - mastery_half_life_min_days
-                        )
+                    half_life_days = mastery_half_life_min_days + mastery_score * (
+                        mastery_half_life_max_days - mastery_half_life_min_days
                     )
                     half_life_hours = half_life_days * 24.0
                     decay_constant = math.log(2) / half_life_hours
-                    mastery_score *= math.exp(
-                        -decay_constant * hours_since
-                    )
+                    mastery_score *= math.exp(-decay_constant * hours_since)
 
             # Update the letter state
             stats.mastery_score = mastery_score
             stats.mastery_qualifying_keystrokes = qualifying_total
 
             # Check if it should be MASTERED
-            if (
-                stats.state == LetterState.STABLE
-                and mastery_score >= mastery_threshold
-            ):
+            if stats.state == LetterState.STABLE and mastery_score >= mastery_threshold:
                 stats.state = LetterState.MASTERED
                 stats.sessions_in_current_state = 0
 

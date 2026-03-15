@@ -33,12 +33,14 @@ _PRACTICE_COLORS: dict[str, str] = {
     "random_strings": COLOR_INFO,       # blue
     "random_words": COLOR_SUCCESS,      # green
     "sentences": COLOR_WARNING,         # yellow
+    "fix_keys": COLOR_ERROR,            # red
 }
 
 _PRACTICE_LABELS: dict[str, str] = {
     "random_strings": "Random Strings",
     "random_words": "Random Words",
     "sentences": "Sentences",
+    "fix_keys": "Fix Keys",
 }
 
 _COLOR_LETTERS = "#888888"

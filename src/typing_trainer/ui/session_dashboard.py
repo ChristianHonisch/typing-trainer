@@ -1,13 +1,17 @@
-"""Session dashboard: session info, spaced repetition alerts, advancement progress."""
+"""Session dashboard: training status table, advancement progress, review alerts."""
 
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QGroupBox,
+    QHeaderView,
     QLabel,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -18,19 +22,43 @@ from typing_trainer.core.letter_manager import (
     PerLetterProgress,
 )
 from typing_trainer.core.spaced_repetition import ReviewStatus
-from typing_trainer.models.session import Session
 from typing_trainer.ui.theme import (
     COLOR_ALERT,
+    COLOR_BG_DARK,
+    COLOR_BG_SECONDARY,
+    COLOR_BG_TERTIARY,
     COLOR_ERROR,
     COLOR_SUCCESS,
+    COLOR_TEXT_PRIMARY,
+    COLOR_TEXT_SECONDARY,
     COLOR_WARNING,
     app_font,
     make_selectable,
 )
 
 
+@dataclass
+class TrainingStatusData:
+    """All data needed to populate the Training Status table."""
+
+    session_runs: int = 0
+    session_keystrokes: int = 0
+    session_training_s: int = 0
+    session_elapsed_s: int = 0
+
+    today_runs: int = 0
+    today_keystrokes: int = 0
+    today_training_s: int = 0
+    today_elapsed_s: int = 0
+
+    total_runs: int = 0
+    total_keystrokes: int = 0
+    total_training_s: int = 0
+    total_elapsed_s: int = 0
+
+
 class SessionDashboard(QWidget):
-    """Displays current session status and spaced repetition info."""
+    """Displays training status, advancement progress, and review info."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -41,38 +69,88 @@ class SessionDashboard(QWidget):
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(10)
 
-        # Session info
-        session_group = QGroupBox("Current Session")
-        session_group.setFont(app_font(11))
-        session_layout = QVBoxLayout(session_group)
-        self._session_label = QLabel("No active session")
-        self._session_label.setFont(app_font(11))
-        self._session_label.setWordWrap(True)
-        make_selectable(self._session_label)
-        session_layout.addWidget(self._session_label)
-        layout.addWidget(session_group)
+        # Training status table
+        self._status_group = QGroupBox("Training Status")
+        self._status_group.setFont(app_font(11))
+        status_layout = QVBoxLayout(self._status_group)
+
+        self._status_table = QTableWidget(4, 3)
+        self._status_table.setFont(app_font(10))
+        self._status_table.setHorizontalHeaderLabels(["Session", "Today", "Total"])
+        self._status_table.setVerticalHeaderLabels(
+            ["Runs", "Keystrokes", "Training", "Elapsed"]
+        )
+        self._status_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._status_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+        self._status_table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
+        # Sizing
+        h_header = self._status_table.horizontalHeader()
+        assert h_header is not None
+        h_header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        h_header.setFont(app_font(9))
+        v_header = self._status_table.verticalHeader()
+        assert v_header is not None
+        v_header.setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+        v_header.setDefaultSectionSize(22)
+        v_header.setFont(app_font(9))
+
+        self._status_table.setMaximumHeight(120)
+
+        # Style
+        self._status_table.setStyleSheet(
+            f"""
+            QTableWidget {{
+                background-color: {COLOR_BG_DARK};
+                color: {COLOR_TEXT_PRIMARY};
+                gridline-color: {COLOR_BG_TERTIARY};
+                border: none;
+            }}
+            QHeaderView::section {{
+                background-color: {COLOR_BG_SECONDARY};
+                color: {COLOR_TEXT_SECONDARY};
+                border: 1px solid {COLOR_BG_TERTIARY};
+                padding: 2px 4px;
+            }}
+            QTableWidget::item {{
+                padding: 2px 4px;
+            }}
+            """
+        )
+
+        # Initialize cells
+        for row in range(4):
+            for col in range(3):
+                item = QTableWidgetItem("-")
+                item.setTextAlignment(
+                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+                )
+                self._status_table.setItem(row, col, item)
+
+        status_layout.addWidget(self._status_table)
+        layout.addWidget(self._status_group)
 
         # Advancement progress
-        advance_group = QGroupBox("Next Letter")
-        advance_group.setFont(app_font(11))
-        advance_layout = QVBoxLayout(advance_group)
+        self._advance_group = QGroupBox("Next Letter")
+        self._advance_group.setFont(app_font(11))
+        advance_layout = QVBoxLayout(self._advance_group)
         self._advance_label = QLabel("")
         self._advance_label.setFont(app_font(11))
         self._advance_label.setWordWrap(True)
         make_selectable(self._advance_label)
         advance_layout.addWidget(self._advance_label)
-        layout.addWidget(advance_group)
+        layout.addWidget(self._advance_group)
 
         # Review alerts
-        review_group = QGroupBox("Review Status")
-        review_group.setFont(app_font(11))
-        review_layout = QVBoxLayout(review_group)
+        self._review_group = QGroupBox("Review Status")
+        self._review_group.setFont(app_font(11))
+        review_layout = QVBoxLayout(self._review_group)
         self._review_label = QLabel("No reviews due")
         self._review_label.setFont(app_font(11))
         self._review_label.setWordWrap(True)
         make_selectable(self._review_label)
         review_layout.addWidget(self._review_label)
-        layout.addWidget(review_group)
+        layout.addWidget(self._review_group)
 
         # Warnings
         self._warning_label = QLabel("")
@@ -87,49 +165,49 @@ class SessionDashboard(QWidget):
 
     @staticmethod
     def _format_duration(seconds: int) -> str:
-        """Format a duration in seconds as ``Xm Ys`` or ``Xs``."""
+        """Format a duration in seconds as ``Xh Ym`` / ``Xm Ys`` / ``Xs``."""
+        if seconds >= 3600:
+            h = seconds // 3600
+            m = (seconds % 3600) // 60
+            return f"{h}h {m:02d}m"
         if seconds >= 60:
             return f"{seconds // 60}m {seconds % 60:02d}s"
         return f"{seconds}s"
 
-    def update_session_info(
-        self,
-        session: Session | None,
-        session_active_s: int = 0,
-        session_elapsed_s: int = 0,
-        today_s: int = 0,
-    ) -> None:
-        """Update the session info display.
+    @staticmethod
+    def _format_count(n: int) -> str:
+        """Format an integer with thousands separator."""
+        return f"{n:,}"
 
-        Args:
-            session: The current session (or None).
-            session_active_s: Active typing time this session (sum of
-                run durations), in seconds.
-            session_elapsed_s: Wall-clock time since session start, in
-                seconds.
-            today_s: Total active typing time today (all sessions), in
-                seconds.
-        """
-        if session is None:
-            if today_s > 0:
-                self._session_label.setText(
-                    f"No active session\nToday: {self._format_duration(today_s)}"
-                )
-            else:
-                self._session_label.setText("No active session")
-            return
+    def _set_cell(self, row: int, col: int, text: str) -> None:
+        item = self._status_table.item(row, col)
+        if item is not None:
+            item.setText(text)
 
-        lines: list[str] = []
-        lines.append(f"Runs completed: {session.run_count}")
-        lines.append(f"Keystrokes: {session.total_cognitive_keystrokes}")
-        if session.run_count > 0:
-            lines.append(f"Accuracy: {session.aggregate_accuracy:.1%}")
-        active = self._format_duration(session_active_s)
-        elapsed = self._format_duration(session_elapsed_s)
-        lines.append(f"Active: {active} (elapsed: {elapsed})")
-        lines.append(f"Today: {self._format_duration(today_s)}")
+    def update_session_info(self, data: TrainingStatusData) -> None:
+        """Update the training status table."""
+        fmt_d = self._format_duration
+        fmt_c = self._format_count
 
-        self._session_label.setText("\n".join(lines))
+        # Row 0: Runs
+        self._set_cell(0, 0, fmt_c(data.session_runs))
+        self._set_cell(0, 1, fmt_c(data.today_runs))
+        self._set_cell(0, 2, fmt_c(data.total_runs))
+
+        # Row 1: Keystrokes
+        self._set_cell(1, 0, fmt_c(data.session_keystrokes))
+        self._set_cell(1, 1, fmt_c(data.today_keystrokes))
+        self._set_cell(1, 2, fmt_c(data.total_keystrokes))
+
+        # Row 2: Training time (active typing)
+        self._set_cell(2, 0, fmt_d(data.session_training_s))
+        self._set_cell(2, 1, fmt_d(data.today_training_s))
+        self._set_cell(2, 2, fmt_d(data.total_training_s))
+
+        # Row 3: Elapsed time (wall clock)
+        self._set_cell(3, 0, fmt_d(data.session_elapsed_s))
+        self._set_cell(3, 1, fmt_d(data.today_elapsed_s))
+        self._set_cell(3, 2, fmt_d(data.total_elapsed_s))
 
     def update_advancement(
         self,
@@ -142,7 +220,6 @@ class SessionDashboard(QWidget):
             self._advance_label.setStyleSheet(f"color: {COLOR_SUCCESS};")
             return
 
-        # Build rich-text display with structured criteria
         parts: list[str] = []
         parts.append(f"Next letter: <b>'{check.next_letter}'</b>")
         parts.append("")
@@ -177,7 +254,6 @@ class SessionDashboard(QWidget):
                 f'<span style="color:{COLOR_SUCCESS};"><b>Ready to advance!</b></span>'
             )
         else:
-            # Find the specific blockers
             blockers: list[str] = []
             if not ks_ok:
                 blockers.append(f"{ks_need - ks} more keystrokes needed")
@@ -223,19 +299,11 @@ class SessionDashboard(QWidget):
 
     @staticmethod
     def _compute_need_text(
-        sequence: list[bool], window: int, required_accuracy: float,
+        sequence: list[bool],
+        window: int,
+        required_accuracy: float,
     ) -> str:
-        """Compute 'need N keystrokes' text from an error window sequence.
-
-        Args:
-            sequence: Boolean list (True=error), oldest-first.
-            window: Rolling window size.
-            required_accuracy: Accuracy threshold (e.g. 0.95).
-
-        Returns:
-            Formatted string like ``" (need 42 keystrokes)"`` or ``""``
-            if the letter already meets the threshold.
-        """
+        """Compute 'need N keystrokes' text from an error window sequence."""
         max_errors = math.floor(window * (1.0 - required_accuracy))
         error_positions = [i for i, is_err in enumerate(sequence) if is_err]
         n_errors = len(error_positions)
@@ -271,7 +339,9 @@ class SessionDashboard(QWidget):
             need_info = ""
             if error_window and p.letter in error_window:
                 need_info = SessionDashboard._compute_need_text(
-                    error_window[p.letter], p.window_size, p.required_accuracy,
+                    error_window[p.letter],
+                    p.window_size,
+                    p.required_accuracy,
                 )
             detail = f"{p.accuracy:.1%} &lt; {p.required_accuracy:.0%}{need_info}"
 
@@ -293,7 +363,7 @@ class SessionDashboard(QWidget):
         lines.append(f"{len(due)} letter(s) due for review:")
         for s in due:
             lines.append(
-                f"  '{s.letter}' — stability {s.current_stability:.2f}, "
+                f"  '{s.letter}' \u2014 stability {s.current_stability:.2f}, "
                 f"last practiced {s.hours_since_practice:.0f}h ago"
             )
         self._review_label.setText("\n".join(lines))

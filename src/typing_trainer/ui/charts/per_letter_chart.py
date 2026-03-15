@@ -90,9 +90,7 @@ class PerLetterChart(QWidget):
         # Assign stable colors
         for i, letter in enumerate(letters):
             if letter not in self._letter_colors:
-                self._letter_colors[letter] = _LETTER_COLORS[
-                    i % len(_LETTER_COLORS)
-                ]
+                self._letter_colors[letter] = _LETTER_COLORS[i % len(_LETTER_COLORS)]
 
         # Update checkboxes: add new, remove gone
         existing = set(self._checkboxes.keys())
@@ -143,7 +141,9 @@ class PerLetterChart(QWidget):
 
         # Legend
         legend = self._plot.addLegend(
-            offset=(-10, 10), labelTextSize="9pt", colCount=2,
+            offset=(10, -10),
+            labelTextSize="9pt",
+            colCount=2,
         )
         legend.setBrush(pg.mkBrush(30, 30, 30, 180))
 
@@ -171,7 +171,9 @@ class PerLetterChart(QWidget):
 
         if curves:
             self._interactive_legend = InteractiveLegend(
-                legend, curves, normal_width=2,
+                legend,
+                curves,
+                normal_width=2,
             )
 
         self._plot.getViewBox().setYRange(max(0.5, y_min - 0.05), 1.02, padding=0)

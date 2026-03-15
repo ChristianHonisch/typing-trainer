@@ -1,12 +1,10 @@
-"""Pre-run configuration widget.
+"""Pre-run configuration widget with preset-based training modes.
 
-Allows the user to set:
-- Run length (number of keystrokes)
-- Mode (relearning / speed / transition)
-- Practice type (random_strings / random_words / sentences / bigram_words)
-- Which active letters to include in the run
-
-Also shows the active letter set and any review alerts.
+Presets:
+  - Learn Keys: motor foundation, unlock new letters (random strings)
+  - Fix Keys: error-prone letter focus (random strings, auto-selected)
+  - Build Speed: real words, accuracy matters, speed grows (random words)
+  - Smooth Pairs: drill specific slow bigrams (bigram words)
 """
 
 from __future__ import annotations
@@ -46,6 +44,32 @@ from typing_trainer.ui.theme import (
 
 _STABLE_STATES = frozenset({LetterState.STABLE, LetterState.MASTERED})
 
+# Preset descriptions (shown after selection)
+_PRESET_DESCRIPTIONS: dict[str, str] = {
+    "Learn Keys": (
+        "The motor foundation. You are learning where each key lives. "
+        "Used to unlock new letters."
+    ),
+    "Fix Keys": (
+        "Optional: the error-prone letter focus. You already know the keys, "
+        "some just need repair."
+    ),
+    "Build Speed": (
+        "Type real words, accuracy still matters, speed grows naturally."
+    ),
+    "Smooth Pairs": (
+        "Drill specific slow bigrams, words containing those pairs."
+    ),
+}
+
+# Preset -> (RunMode, PracticeType, default_length)
+_PRESET_CONFIG: dict[str, tuple[RunMode, PracticeType, int]] = {
+    "Learn Keys": (RunMode.RELEARNING, PracticeType.RANDOM_STRINGS, 120),
+    "Fix Keys": (RunMode.RELEARNING, PracticeType.FIX_KEYS, 60),
+    "Build Speed": (RunMode.SPEED, PracticeType.RANDOM_WORDS, 120),
+    "Smooth Pairs": (RunMode.TRANSITION, PracticeType.BIGRAM_WORDS, 120),
+}
+
 
 class RunConfigWidget(QWidget):
     """Widget for configuring and starting a typing run.
@@ -73,6 +97,9 @@ class RunConfigWidget(QWidget):
         self._rest_timer = QTimer(self)
         self._rest_timer.setInterval(1000)
         self._rest_timer.timeout.connect(self._on_rest_tick)
+
+        # Suppress auto-switch feedback loop
+        self._suppress_letter_toggle_switch = False
 
         self._setup_ui()
 
@@ -125,7 +152,7 @@ class RunConfigWidget(QWidget):
         self._bigram_label.hide()
         layout.addWidget(self._bigram_label)
 
-        # Configuration controls
+        # --- Configuration controls ---
         config_layout = QHBoxLayout()
 
         # Run length
@@ -138,52 +165,89 @@ class RunConfigWidget(QWidget):
         self._length_spin.setRange(
             self.config.run_length_minimum, 1000
         )
-        self._length_spin.setValue(self.config.run_length_default_relearning)
+        self._length_spin.setValue(120)
         self._length_spin.setSingleStep(10)
         self._length_spin.setFont(app_font(12))
         length_group.addWidget(self._length_spin)
         config_layout.addLayout(length_group)
 
-        # Mode
-        mode_group = QVBoxLayout()
-        mode_label = QLabel("Mode:")
-        mode_label.setFont(app_font(11))
-        mode_group.addWidget(mode_label)
+        # Preset
+        preset_group = QVBoxLayout()
+        preset_label = QLabel("Preset:")
+        preset_label.setFont(app_font(11))
+        preset_group.addWidget(preset_label)
 
-        self._mode_combo = QComboBox()
-        self._mode_combo.setFont(app_font(12))
-        self._mode_combo.addItem("Relearning", RunMode.RELEARNING)
-        self._mode_combo.addItem("Speed", RunMode.SPEED)
-        self._mode_combo.addItem("Transition", RunMode.TRANSITION)
-        self._mode_combo.currentIndexChanged.connect(self._on_mode_changed)
-        mode_group.addWidget(self._mode_combo)
+        self._preset_combo = QComboBox()
+        self._preset_combo.setFont(app_font(12))
+        self._preset_combo.addItems(list(_PRESET_CONFIG.keys()))
+        self._preset_combo.currentIndexChanged.connect(self._on_preset_changed)
+        preset_group.addWidget(self._preset_combo)
 
-        self._mode_warning = QLabel("")
-        self._mode_warning.setFont(app_font(9))
-        self._mode_warning.setStyleSheet(f"color: {COLOR_ALERT};")
-        self._mode_warning.setWordWrap(True)
-        self._mode_warning.hide()
-        mode_group.addWidget(self._mode_warning)
+        self._preset_warning = QLabel("")
+        self._preset_warning.setFont(app_font(9))
+        self._preset_warning.setStyleSheet(f"color: {COLOR_ALERT};")
+        self._preset_warning.setWordWrap(True)
+        self._preset_warning.hide()
+        preset_group.addWidget(self._preset_warning)
 
-        config_layout.addLayout(mode_group)
-
-        # Practice type
-        type_group = QVBoxLayout()
-        type_label = QLabel("Practice:")
-        type_label.setFont(app_font(11))
-        type_group.addWidget(type_label)
-
-        self._type_combo = QComboBox()
-        self._type_combo.setFont(app_font(12))
-        self._type_combo.addItem("Random Strings", PracticeType.RANDOM_STRINGS)
-        self._type_combo.addItem("Random Words", PracticeType.RANDOM_WORDS)
-        self._type_combo.addItem("Sentences", PracticeType.SENTENCES)
-        type_group.addWidget(self._type_combo)
-        config_layout.addLayout(type_group)
+        config_layout.addLayout(preset_group)
 
         layout.addLayout(config_layout)
 
-        # Highlight weak letters option
+        # Preset description
+        self._preset_desc = QLabel("")
+        self._preset_desc.setFont(app_font(10))
+        self._preset_desc.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY};")
+        self._preset_desc.setWordWrap(True)
+        layout.addWidget(self._preset_desc)
+
+        # --- Fix Keys controls (worst N / best M) ---
+        self._fix_keys_row = QHBoxLayout()
+        self._fix_keys_row.setSpacing(6)
+
+        fix_worst_label = QLabel("Worst:")
+        fix_worst_label.setFont(app_font(10))
+        self._fix_keys_row.addWidget(fix_worst_label)
+
+        self._fix_worst_spin = QSpinBox()
+        self._fix_worst_spin.setFont(app_font(10))
+        self._fix_worst_spin.setRange(1, 26)
+        self._fix_worst_spin.setValue(3)
+        self._fix_worst_spin.setSingleStep(1)
+        self._fix_worst_spin.setToolTip(
+            "Number of worst letters (by accuracy) to include"
+        )
+        self._fix_worst_spin.valueChanged.connect(self._on_fix_keys_changed)
+        self._fix_keys_row.addWidget(self._fix_worst_spin)
+
+        self._fix_keys_row.addSpacing(10)
+
+        fix_best_label = QLabel("Best:")
+        fix_best_label.setFont(app_font(10))
+        self._fix_keys_row.addWidget(fix_best_label)
+
+        self._fix_best_spin = QSpinBox()
+        self._fix_best_spin.setFont(app_font(10))
+        self._fix_best_spin.setRange(0, 26)
+        self._fix_best_spin.setValue(2)
+        self._fix_best_spin.setSingleStep(1)
+        self._fix_best_spin.setToolTip(
+            "Number of best letters (by accuracy) to include as anchors"
+        )
+        self._fix_best_spin.valueChanged.connect(self._on_fix_keys_changed)
+        self._fix_keys_row.addWidget(self._fix_best_spin)
+
+        self._fix_keys_row.addStretch()
+
+        # Collect fix keys widgets for show/hide
+        self._fix_keys_widgets = [
+            fix_worst_label, self._fix_worst_spin,
+            fix_best_label, self._fix_best_spin,
+        ]
+
+        layout.addLayout(self._fix_keys_row)
+
+        # --- Highlight weak letters option (Learn Keys only) ---
         highlight_layout = QHBoxLayout()
         highlight_layout.setSpacing(6)
 
@@ -199,11 +263,17 @@ class RunConfigWidget(QWidget):
         self._highlight_count_spin.setSingleStep(1)
         highlight_layout.addWidget(self._highlight_count_spin)
 
-        highlight_suffix = QLabel("letters")
-        highlight_suffix.setFont(app_font(10))
-        highlight_layout.addWidget(highlight_suffix)
+        self._highlight_suffix = QLabel("letters")
+        self._highlight_suffix.setFont(app_font(10))
+        highlight_layout.addWidget(self._highlight_suffix)
 
         highlight_layout.addStretch()
+
+        self._highlight_widgets = [
+            self._highlight_cb, self._highlight_count_spin,
+            self._highlight_suffix,
+        ]
+
         layout.addLayout(highlight_layout)
 
         layout.addStretch()
@@ -241,6 +311,82 @@ class RunConfigWidget(QWidget):
 
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
+        # Apply initial preset state
+        self._apply_preset_ui()
+
+    # ------------------------------------------------------------------
+    # Preset handling
+    # ------------------------------------------------------------------
+
+    def _current_preset(self) -> str:
+        return self._preset_combo.currentText()
+
+    def _on_preset_changed(self, _index: int) -> None:
+        """Handle preset selection change."""
+        preset = self._current_preset()
+        cfg = _PRESET_CONFIG.get(preset)
+        if cfg is not None:
+            _mode, _ptype, default_length = cfg
+            self._length_spin.setValue(default_length)
+
+        self._apply_preset_ui()
+        self._apply_default_selection()
+        self._update_preset_warning()
+
+    def _apply_preset_ui(self) -> None:
+        """Show/hide UI controls appropriate for the current preset."""
+        preset = self._current_preset()
+
+        # Description
+        self._preset_desc.setText(
+            _PRESET_DESCRIPTIONS.get(preset, "")
+        )
+
+        # Fix Keys controls
+        is_fix = preset == "Fix Keys"
+        for w in self._fix_keys_widgets:
+            w.setVisible(is_fix)
+
+        # Highlight weak (Learn Keys only)
+        is_learn = preset == "Learn Keys"
+        for w in self._highlight_widgets:
+            w.setVisible(is_learn)
+
+        # Bigram display (Smooth Pairs only)
+        self._update_bigram_display()
+
+    def _update_preset_warning(self) -> None:
+        """Show warnings for presets whose prerequisites aren't met."""
+        preset = self._current_preset()
+        if preset == "Build Speed" and not self._speed_available:
+            self._preset_warning.setText(
+                "Keys are not settled. Speed training is not recommended."
+            )
+            self._preset_warning.show()
+        elif preset == "Smooth Pairs":
+            if not self._speed_available:
+                self._preset_warning.setText(
+                    "Keys are not settled. Transition training is not recommended."
+                )
+                self._preset_warning.show()
+            elif not self._selected_bigrams:
+                self._preset_warning.setText(
+                    "No bigrams selected. Select bigrams in Analysis > Bigrams."
+                )
+                self._preset_warning.show()
+            else:
+                self._preset_warning.hide()
+        else:
+            self._preset_warning.hide()
+
+    def get_mode_and_practice_type(self) -> tuple[RunMode, PracticeType]:
+        """Get the RunMode and PracticeType for the current preset."""
+        preset = self._current_preset()
+        cfg = _PRESET_CONFIG.get(preset)
+        if cfg is not None:
+            return cfg[0], cfg[1]
+        return RunMode.RELEARNING, PracticeType.RANDOM_STRINGS
+
     # ------------------------------------------------------------------
     # Letter display and selection
     # ------------------------------------------------------------------
@@ -275,17 +421,11 @@ class RunConfigWidget(QWidget):
         )
 
         self._rebuild_letter_toggles()
-        self._update_mode_warning()
-        self._update_practice_types()
+        self._update_preset_warning()
         self._update_highlight_max()
 
     def _rebuild_letter_toggles(self) -> None:
-        """Rebuild the letter toggle buttons to match current active letters.
-
-        Preserves the current selection where possible (only removes letters
-        that are no longer active).  Does NOT reset the selection to the
-        mode default — that only happens on explicit mode change.
-        """
+        """Rebuild the letter toggle buttons to match current active letters."""
         # Remove old buttons
         for btn in self._letter_buttons.values():
             self._toggle_row.removeWidget(btn)
@@ -295,7 +435,12 @@ class RunConfigWidget(QWidget):
         # Prune selection: drop letters no longer active
         self._selected_letters &= set(self._active_letters.keys())
 
-        # If selection is now empty (e.g. first call), apply mode default
+        # Learn Keys: always include all active letters so newly
+        # unlocked letters are auto-selected immediately.
+        if self._current_preset() == "Learn Keys":
+            self._selected_letters = set(self._active_letters.keys())
+
+        # If selection is now empty (e.g. first call), apply preset default
         if not self._selected_letters and self._active_letters:
             self._apply_default_selection()
 
@@ -318,19 +463,23 @@ class RunConfigWidget(QWidget):
         self._update_start_button()
 
     def _apply_default_selection(self) -> None:
-        """Set the letter selection to the mode-appropriate default.
+        """Set the letter selection to the preset-appropriate default.
 
-        - Relearning: all active letters
-        - Speed / Transition: only STABLE + MASTERED letters
+        - Learn Keys: all active letters
+        - Fix Keys: auto-select worst N + best M
+        - Build Speed / Smooth Pairs: only STABLE + MASTERED letters
         """
-        mode = self._mode_combo.currentData()
-        if mode in (RunMode.SPEED, RunMode.TRANSITION):
+        preset = self._current_preset()
+        if preset in ("Build Speed", "Smooth Pairs"):
             self._selected_letters = {
                 letter
                 for letter, stats in self._active_letters.items()
                 if stats.state in _STABLE_STATES
             }
+        elif preset == "Fix Keys":
+            self._apply_fix_keys_selection()
         else:
+            # Learn Keys: all
             self._selected_letters = set(self._active_letters.keys())
 
         # Sync button checked state
@@ -342,12 +491,73 @@ class RunConfigWidget(QWidget):
         self._update_toggle_styles()
         self._update_start_button()
 
+    def _apply_fix_keys_selection(self) -> None:
+        """Auto-select worst N + best M letters by rolling error rate."""
+        n_worst = self._fix_worst_spin.value()
+        n_best = self._fix_best_spin.value()
+
+        # Sort by error rate descending (worst first)
+        ranked = sorted(
+            self._active_letters.items(),
+            key=lambda t: t[1].rolling_error_rate,
+            reverse=True,
+        )
+
+        selected: set[str] = set()
+
+        # Worst N
+        for letter, _stats in ranked[:n_worst]:
+            selected.add(letter)
+
+        # Best M (from the end, skip any already selected)
+        if n_best > 0:
+            best_candidates = [
+                letter for letter, _ in reversed(ranked)
+                if letter not in selected
+            ]
+            for letter in best_candidates[:n_best]:
+                selected.add(letter)
+
+        self._selected_letters = selected
+
+    def _on_fix_keys_changed(self) -> None:
+        """Handle worst/best spinbox value changes in Fix Keys preset."""
+        if self._current_preset() != "Fix Keys":
+            return
+        self._apply_fix_keys_selection()
+        # Sync buttons
+        for letter, btn in self._letter_buttons.items():
+            btn.blockSignals(True)
+            btn.setChecked(letter in self._selected_letters)
+            btn.blockSignals(False)
+        self._update_toggle_styles()
+        self._update_start_button()
+        self._update_highlight_max()
+
     def _on_letter_toggled(self, letter: str, checked: bool) -> None:
         """Handle a letter toggle button click."""
         if checked:
             self._selected_letters.add(letter)
         else:
             self._selected_letters.discard(letter)
+
+        # Auto-switch from Learn Keys to Fix Keys if user deselects a letter
+        if (
+            not self._suppress_letter_toggle_switch
+            and not checked
+            and self._current_preset() == "Learn Keys"
+        ):
+            self._suppress_letter_toggle_switch = True
+            self._preset_combo.blockSignals(True)
+            idx = self._preset_combo.findText("Fix Keys")
+            if idx >= 0:
+                self._preset_combo.setCurrentIndex(idx)
+            self._preset_combo.blockSignals(False)
+            # Apply Fix Keys UI but keep the current manual selection
+            self._apply_preset_ui()
+            self._update_preset_warning()
+            self._suppress_letter_toggle_switch = False
+
         self._update_toggle_styles()
         self._update_start_button()
         self._update_highlight_max()
@@ -394,10 +604,7 @@ class RunConfigWidget(QWidget):
         self._start_btn.setEnabled(len(self._selected_letters) > 0)
 
     def get_selected_letters(self) -> dict[str, LetterStats]:
-        """Get the currently selected letters with their stats.
-
-        Returns a subset of active_letters filtered to only selected ones.
-        """
+        """Get the currently selected letters with their stats."""
         return {
             letter: stats
             for letter, stats in self._active_letters.items()
@@ -415,10 +622,11 @@ class RunConfigWidget(QWidget):
     def get_highlight_letters(self) -> set[str]:
         """Return the set of letters that should be highlighted as weak.
 
-        Selects the N worst letters by rolling error rate (200-keystroke
-        window) from the currently selected non-space letters.  Returns
-        an empty set when the checkbox is unchecked or N is 0.
+        Only available in Learn Keys preset.  Returns empty set for
+        other presets or when the checkbox is unchecked.
         """
+        if self._current_preset() != "Learn Keys":
+            return set()
         if not self._highlight_cb.isChecked():
             return set()
         n = self._highlight_count_spin.value()
@@ -436,7 +644,7 @@ class RunConfigWidget(QWidget):
         return {letter for letter, _ in candidates[:n]}
 
     # ------------------------------------------------------------------
-    # Alerts, mode, practice type
+    # Alerts, bigrams
     # ------------------------------------------------------------------
 
     def set_alerts(self, alerts: list[str]) -> None:
@@ -446,75 +654,6 @@ class RunConfigWidget(QWidget):
             self._alert_label.show()
         else:
             self._alert_label.hide()
-
-    def _on_mode_changed(self, index: int) -> None:
-        mode = self._mode_combo.currentData()
-        self._update_mode_warning()
-        self._update_practice_types()
-        # Reset run length to mode-appropriate default
-        if mode == RunMode.SPEED:
-            self._length_spin.setValue(self.config.run_length_default_speed)
-        elif mode == RunMode.TRANSITION:
-            self._length_spin.setValue(self.config.run_length_default_transition)
-        else:
-            self._length_spin.setValue(self.config.run_length_default_relearning)
-
-        # Reset letter selection to mode default
-        self._apply_default_selection()
-
-    def _update_mode_warning(self) -> None:
-        """Show or hide warning when speed/transition conditions aren't met."""
-        mode = self._mode_combo.currentData()
-        if mode == RunMode.SPEED and not self._speed_available:
-            self._mode_warning.setText(
-                "Keys are not settled. Speed training is not recommended."
-            )
-            self._mode_warning.show()
-        elif mode == RunMode.TRANSITION and not self._transition_available:
-            if not self._speed_available:
-                self._mode_warning.setText(
-                    "Keys are not settled. Transition training is not recommended."
-                )
-            else:
-                self._mode_warning.setText(
-                    "No bigrams selected. Select bigrams in Analysis > Bigrams."
-                )
-            self._mode_warning.show()
-        else:
-            self._mode_warning.hide()
-
-    def _update_practice_types(self) -> None:
-        """Update available practice types based on the selected mode.
-
-        Relearning:  random_strings, random_words
-        Speed:       random_words, sentences
-        Transition:  bigram_words (fixed, no choice)
-        """
-        mode = self._mode_combo.currentData()
-        prev_type = self._type_combo.currentData()
-
-        self._type_combo.blockSignals(True)
-        self._type_combo.clear()
-
-        if mode == RunMode.TRANSITION:
-            self._type_combo.addItem("Bigram Words", PracticeType.BIGRAM_WORDS)
-        elif mode == RunMode.SPEED:
-            self._type_combo.addItem("Random Words", PracticeType.RANDOM_WORDS)
-            self._type_combo.addItem("Sentences", PracticeType.SENTENCES)
-        else:
-            self._type_combo.addItem("Random Strings", PracticeType.RANDOM_STRINGS)
-            self._type_combo.addItem("Random Words", PracticeType.RANDOM_WORDS)
-
-        # Try to restore previous selection
-        for i in range(self._type_combo.count()):
-            if self._type_combo.itemData(i) == prev_type:
-                self._type_combo.setCurrentIndex(i)
-                break
-
-        self._type_combo.blockSignals(False)
-
-        # Show/hide bigram selection info
-        self._update_bigram_display()
 
     # ------------------------------------------------------------------
     # Keyboard, bigrams, rest timer
@@ -528,11 +667,7 @@ class RunConfigWidget(QWidget):
             super().keyPressEvent(event)
 
     def set_selected_bigrams(self, bigrams: list[tuple[str, str]]) -> None:
-        """Set the selected bigrams for transition training.
-
-        Called by main_window when the user selects bigrams in the
-        analysis tab's bigram chart.
-        """
+        """Set the selected bigrams for transition training."""
         self._selected_bigrams = list(bigrams)
         self._transition_available = len(bigrams) > 0
         self._update_bigram_display()
@@ -542,9 +677,9 @@ class RunConfigWidget(QWidget):
         return list(self._selected_bigrams)
 
     def _update_bigram_display(self) -> None:
-        """Show/hide the bigram selection label based on mode."""
-        mode = self._mode_combo.currentData()
-        if mode == RunMode.TRANSITION and self._selected_bigrams:
+        """Show/hide the bigram selection label based on preset."""
+        preset = self._current_preset()
+        if preset == "Smooth Pairs" and self._selected_bigrams:
             bigram_strs = []
             for a, b in self._selected_bigrams:
                 a_label = "SPC" if a == " " else a
@@ -559,12 +694,7 @@ class RunConfigWidget(QWidget):
             self._bigram_label.hide()
 
     def start_rest_timer(self, seconds: int) -> None:
-        """Start or resume the rest suggestion countdown.
-
-        Called by main_window when transitioning from the summary
-        screen back to the config screen.  If ``seconds`` is 0,
-        shows "Rest complete" immediately without counting down.
-        """
+        """Start or resume the rest suggestion countdown."""
         self._rest_remaining = seconds
         self._update_rest_display()
         self._rest_label.show()
@@ -595,6 +725,5 @@ class RunConfigWidget(QWidget):
         self._rest_timer.stop()
         self._rest_label.hide()
         length = self._length_spin.value()
-        mode = self._mode_combo.currentData()
-        practice_type = self._type_combo.currentData()
+        mode, practice_type = self.get_mode_and_practice_type()
         self.start_run.emit(length, mode, practice_type)

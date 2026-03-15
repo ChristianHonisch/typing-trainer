@@ -204,12 +204,8 @@ class TestLetterStateCRUD:
 
     def test_get_all_letter_states(self, tmp_path):
         repo = make_repo(tmp_path)
-        repo.save_letter_state(
-            LetterStats(letter="e", state=LetterState.STABLE)
-        )
-        repo.save_letter_state(
-            LetterStats(letter="n", state=LetterState.CONSOLIDATING)
-        )
+        repo.save_letter_state(LetterStats(letter="e", state=LetterState.STABLE))
+        repo.save_letter_state(LetterStats(letter="n", state=LetterState.CONSOLIDATING))
 
         all_states = repo.get_all_letter_states()
         assert len(all_states) == 2
@@ -273,9 +269,16 @@ class TestRollingAccuracy:
         repo = make_repo(tmp_path)
         sid = self._make_session(repo)
         rid = self._make_run(repo, sid)
-        self._insert_keystrokes(repo, rid, [
-            ("e", "correct"), ("e", "correct"), ("n", "correct"), ("n", "correct"),
-        ])
+        self._insert_keystrokes(
+            repo,
+            rid,
+            [
+                ("e", "correct"),
+                ("e", "correct"),
+                ("n", "correct"),
+                ("n", "correct"),
+            ],
+        )
         result = repo.get_per_letter_rolling_accuracy(["e", "n"], window=10)
         assert result["e"] == (1.0, 2)
         assert result["n"] == (1.0, 2)
@@ -360,7 +363,12 @@ class TestAnalyticsQueries:
         return repo.create_session(session)
 
     def _make_run(
-        self, repo, session_id, accuracy=1.0, wpm=30.0, failed=False,
+        self,
+        repo,
+        session_id,
+        accuracy=1.0,
+        wpm=30.0,
+        failed=False,
         practice_type=PracticeType.RANDOM_STRINGS,
     ):
         run = RunResult(
@@ -422,12 +430,8 @@ class TestAnalyticsQueries:
     def test_runs_summary_practice_type(self, tmp_path):
         repo = make_repo(tmp_path)
         sid = self._make_session(repo)
-        self._make_run(
-            repo, sid, practice_type=PracticeType.RANDOM_STRINGS
-        )
-        self._make_run(
-            repo, sid, practice_type=PracticeType.RANDOM_WORDS
-        )
+        self._make_run(repo, sid, practice_type=PracticeType.RANDOM_STRINGS)
+        self._make_run(repo, sid, practice_type=PracticeType.RANDOM_WORDS)
         result = repo.get_all_runs_summary()
         assert len(result) == 2
         assert result[0].practice_type == "random_strings"
@@ -460,10 +464,17 @@ class TestAnalyticsQueries:
         # Run 1: 5 correct for 'e'
         self._insert_keystrokes(repo, rid1, [("e", "correct")] * 5)
         # Run 2: 3 correct + 2 errors for 'e'
-        self._insert_keystrokes(repo, rid2, [
-            ("e", "correct"), ("e", "correct"), ("e", "correct"),
-            ("e", "cognitive_error"), ("e", "cognitive_error"),
-        ])
+        self._insert_keystrokes(
+            repo,
+            rid2,
+            [
+                ("e", "correct"),
+                ("e", "correct"),
+                ("e", "correct"),
+                ("e", "cognitive_error"),
+                ("e", "cognitive_error"),
+            ],
+        )
         series = repo.get_per_letter_accuracy_series("e", window=200)
         assert len(series) == 2
         # After run 1: 5/5 = 100%
@@ -491,9 +502,15 @@ class TestAnalyticsQueries:
         repo = make_repo(tmp_path)
         sid = self._make_session(repo)
         rid = self._make_run(repo, sid)
-        self._insert_keystrokes(repo, rid, [
-            ("e", "correct"), ("n", "cognitive_error"), ("e", "correct"),
-        ])
+        self._insert_keystrokes(
+            repo,
+            rid,
+            [
+                ("e", "correct"),
+                ("n", "cognitive_error"),
+                ("e", "correct"),
+            ],
+        )
         series = repo.get_per_letter_accuracy_series("e", window=200)
         assert len(series) == 1
         assert series[0][1] == 1.0  # only 'e' keystrokes (both correct)
@@ -508,9 +525,15 @@ class TestAnalyticsQueries:
         repo = make_repo(tmp_path)
         sid = self._make_session(repo)
         rid = self._make_run(repo, sid)
-        self._insert_keystrokes(repo, rid, [
-            ("e", "correct"), ("e", "correct"), ("e", "cognitive_error"),
-        ])
+        self._insert_keystrokes(
+            repo,
+            rid,
+            [
+                ("e", "correct"),
+                ("e", "correct"),
+                ("e", "cognitive_error"),
+            ],
+        )
         result = repo.get_per_letter_error_rates()
         assert "e" in result
         errors, total, rate = result["e"]
@@ -522,10 +545,16 @@ class TestAnalyticsQueries:
         repo = make_repo(tmp_path)
         sid = self._make_session(repo)
         rid = self._make_run(repo, sid)
-        self._insert_keystrokes(repo, rid, [
-            ("e", "correct"), ("e", "correct"),
-            ("n", "correct"), ("n", "cognitive_error"),
-        ])
+        self._insert_keystrokes(
+            repo,
+            rid,
+            [
+                ("e", "correct"),
+                ("e", "correct"),
+                ("n", "correct"),
+                ("n", "cognitive_error"),
+            ],
+        )
         result = repo.get_per_letter_error_rates()
         assert result["e"] == (0, 2, 0.0)
         assert result["n"][0] == 1  # 1 error
@@ -536,16 +565,21 @@ class TestAnalyticsQueries:
         repo = make_repo(tmp_path)
         sid = self._make_session(repo)
         rid = self._make_run(repo, sid)
-        self._insert_keystrokes(repo, rid, [
-            ("e", "correct"), ("e", "motor_overflow"), ("e", "cognitive_error"),
-        ])
+        self._insert_keystrokes(
+            repo,
+            rid,
+            [
+                ("e", "correct"),
+                ("e", "motor_overflow"),
+                ("e", "cognitive_error"),
+            ],
+        )
         result = repo.get_per_letter_error_rates()
         # motor_overflow excluded: 1 correct + 1 error = 2 total
         errors, total, rate = result["e"]
         assert total == 2
         assert errors == 1
         assert abs(rate - 0.5) < 0.01
-
 
     # --- get_per_letter_rt_series ---
 
@@ -573,11 +607,15 @@ class TestAnalyticsQueries:
         repo = make_repo(tmp_path)
         sid = self._make_session(repo)
         rid = self._make_run(repo, sid)
-        self._insert_keystrokes_with_rt(repo, rid, [
-            ("e", "correct", 200),
-            ("e", "correct", 300),
-            ("e", "correct", 400),
-        ])
+        self._insert_keystrokes_with_rt(
+            repo,
+            rid,
+            [
+                ("e", "correct", 200),
+                ("e", "correct", 300),
+                ("e", "correct", 400),
+            ],
+        )
         series = repo.get_per_letter_rt_series("e")
         assert len(series) == 1
         run_id, rts = series[0]
@@ -589,14 +627,22 @@ class TestAnalyticsQueries:
         sid = self._make_session(repo)
         rid1 = self._make_run(repo, sid)
         rid2 = self._make_run(repo, sid)
-        self._insert_keystrokes_with_rt(repo, rid1, [
-            ("e", "correct", 500),
-            ("e", "correct", 500),
-        ])
-        self._insert_keystrokes_with_rt(repo, rid2, [
-            ("e", "correct", 300),
-            ("e", "correct", 300),
-        ])
+        self._insert_keystrokes_with_rt(
+            repo,
+            rid1,
+            [
+                ("e", "correct", 500),
+                ("e", "correct", 500),
+            ],
+        )
+        self._insert_keystrokes_with_rt(
+            repo,
+            rid2,
+            [
+                ("e", "correct", 300),
+                ("e", "correct", 300),
+            ],
+        )
         series = repo.get_per_letter_rt_series("e")
         assert len(series) == 2
         assert series[0][0] == rid1
@@ -608,11 +654,15 @@ class TestAnalyticsQueries:
         repo = make_repo(tmp_path)
         sid = self._make_session(repo)
         rid = self._make_run(repo, sid)
-        self._insert_keystrokes_with_rt(repo, rid, [
-            ("e", "correct", 200),
-            ("e", "cognitive_error", 9999),  # should be excluded
-            ("e", "correct", 400),
-        ])
+        self._insert_keystrokes_with_rt(
+            repo,
+            rid,
+            [
+                ("e", "correct", 200),
+                ("e", "cognitive_error", 9999),  # should be excluded
+                ("e", "correct", 400),
+            ],
+        )
         series = repo.get_per_letter_rt_series("e")
         assert len(series) == 1
         # Only correct keystrokes
@@ -622,10 +672,14 @@ class TestAnalyticsQueries:
         repo = make_repo(tmp_path)
         sid = self._make_session(repo)
         rid = self._make_run(repo, sid)
-        self._insert_keystrokes_with_rt(repo, rid, [
-            ("e", "correct", None),
-            ("e", "correct", 400),
-        ])
+        self._insert_keystrokes_with_rt(
+            repo,
+            rid,
+            [
+                ("e", "correct", None),
+                ("e", "correct", 400),
+            ],
+        )
         series = repo.get_per_letter_rt_series("e")
         assert len(series) == 1
         # Only the non-null RT contributes
@@ -636,13 +690,17 @@ class TestAnalyticsQueries:
         repo = make_repo(tmp_path)
         sid = self._make_session(repo)
         rid = self._make_run(repo, sid)
-        self._insert_keystrokes_with_rt(repo, rid, [
-            ("e", "correct", 300),
-            ("e", "correct", 2000),   # exactly at cap — included
-            ("e", "correct", 2001),   # just above cap — excluded
-            ("e", "correct", 7000),   # far above cap — excluded
-            ("e", "correct", 500),
-        ])
+        self._insert_keystrokes_with_rt(
+            repo,
+            rid,
+            [
+                ("e", "correct", 300),
+                ("e", "correct", 2000),  # exactly at cap — included
+                ("e", "correct", 2001),  # just above cap — excluded
+                ("e", "correct", 7000),  # far above cap — excluded
+                ("e", "correct", 500),
+            ],
+        )
         series = repo.get_per_letter_rt_series("e")
         assert len(series) == 1
         assert series[0][1] == [300, 2000, 500]
@@ -652,10 +710,14 @@ class TestAnalyticsQueries:
         repo = make_repo(tmp_path)
         sid = self._make_session(repo)
         rid = self._make_run(repo, sid)
-        self._insert_keystrokes_with_rt(repo, rid, [
-            ("e", "correct", 5000),
-            ("e", "correct", 8000),
-        ])
+        self._insert_keystrokes_with_rt(
+            repo,
+            rid,
+            [
+                ("e", "correct", 5000),
+                ("e", "correct", 8000),
+            ],
+        )
         series = repo.get_per_letter_rt_series("e")
         assert series == []
 
@@ -685,8 +747,16 @@ class TestConfusionPairs:
                (run_id, position, timestamp_ms, expected_char,
                 actual_char, error_type, reaction_time_ms, is_backspace)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (run_id, position, 1000 + position * 100, expected, actual,
-             error_type, 100, 0),
+            (
+                run_id,
+                position,
+                1000 + position * 100,
+                expected,
+                actual,
+                error_type,
+                100,
+                0,
+            ),
         )
         repo.db.conn.commit()
 
@@ -837,17 +907,14 @@ class TestPositionErrorRate:
         )
         return repo.save_run(run, session_id)
 
-    def _insert_keystroke(
-        self, repo, run_id, position, error_type="correct"
-    ):
+    def _insert_keystroke(self, repo, run_id, position, error_type="correct"):
         actual = "e" if error_type == "correct" else "x"
         repo.db.conn.execute(
             """INSERT INTO keystrokes
                (run_id, position, timestamp_ms, expected_char,
                 actual_char, error_type, reaction_time_ms, is_backspace)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (run_id, position, 1000 + position * 100, "e", actual,
-             error_type, 100, 0),
+            (run_id, position, 1000 + position * 100, "e", actual, error_type, 100, 0),
         )
         repo.db.conn.commit()
 
@@ -979,8 +1046,15 @@ class TestBigramErrorRates:
         repo.db.conn.commit()
 
     def _insert_bigram_keystroke(
-        self, repo, run_id, position, prev_char, expected, actual,
-        error_type="correct", rt=100,
+        self,
+        repo,
+        run_id,
+        position,
+        prev_char,
+        expected,
+        actual,
+        error_type="correct",
+        rt=100,
     ):
         repo.db.conn.execute(
             """INSERT INTO keystrokes
@@ -988,8 +1062,17 @@ class TestBigramErrorRates:
                 actual_char, error_type, reaction_time_ms, prev_char,
                 is_backspace)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (run_id, position, 1000 + position * 100, expected, actual,
-             error_type, rt, prev_char, 0),
+            (
+                run_id,
+                position,
+                1000 + position * 100,
+                expected,
+                actual,
+                error_type,
+                rt,
+                prev_char,
+                0,
+            ),
         )
         repo.db.conn.commit()
 
@@ -1005,21 +1088,13 @@ class TestBigramErrorRates:
         # 8 correct + 2 errors for bigram (e, n), positions 1..10
         # Interleave errors so each error's predecessor is correct
         for i in range(1, 9):
-            self._insert_bigram_keystroke(
-                repo, rid, i, "e", "n", "n", "correct"
-            )
+            self._insert_bigram_keystroke(repo, rid, i, "e", "n", "n", "correct")
         # Error at pos 9 (prev pos 8 = correct) → counted
-        self._insert_bigram_keystroke(
-            repo, rid, 9, "e", "n", "x", "cognitive_error"
-        )
+        self._insert_bigram_keystroke(repo, rid, 9, "e", "n", "x", "cognitive_error")
         # Correct at pos 10 (prev pos 9 = error → excluded from bigram)
-        self._insert_bigram_keystroke(
-            repo, rid, 10, "e", "n", "n", "correct"
-        )
+        self._insert_bigram_keystroke(repo, rid, 10, "e", "n", "n", "correct")
         # Error at pos 11 (prev pos 10 = correct) → counted
-        self._insert_bigram_keystroke(
-            repo, rid, 11, "e", "n", "x", "cognitive_error"
-        )
+        self._insert_bigram_keystroke(repo, rid, 11, "e", "n", "x", "cognitive_error")
         # 8 + 1 correct with correct predecessor = 9 correct counted
         # 2 errors with correct predecessor = 2 errors counted
         # pos 10 excluded (prev was error) → 9 + 2 = 11 total? No:
@@ -1042,9 +1117,7 @@ class TestBigramErrorRates:
         self._insert_seed(repo, rid, "e")
         # Only 3 keystrokes for (e, n) — below min_count=10
         for i in range(1, 4):
-            self._insert_bigram_keystroke(
-                repo, rid, i, "e", "n", "n", "correct"
-            )
+            self._insert_bigram_keystroke(repo, rid, i, "e", "n", "n", "correct")
         result = repo.get_bigram_error_rates(min_count=10)
         assert len(result) == 0
         # But passes with min_count=3
@@ -1057,12 +1130,8 @@ class TestBigramErrorRates:
         rid = self._make_run(repo, sid)
         self._insert_seed(repo, rid, "e")
         for i in range(1, 11):
-            self._insert_bigram_keystroke(
-                repo, rid, i, "e", "n", "n", "correct"
-            )
-        self._insert_bigram_keystroke(
-            repo, rid, 11, "e", "n", "n", "motor_overflow"
-        )
+            self._insert_bigram_keystroke(repo, rid, i, "e", "n", "n", "correct")
+        self._insert_bigram_keystroke(repo, rid, 11, "e", "n", "n", "motor_overflow")
         result = repo.get_bigram_error_rates(min_count=5)
         assert len(result) == 1
         assert result[0][3] == 10  # motor overflow excluded
@@ -1095,13 +1164,17 @@ class TestBigramErrorRates:
         for i in range(1, 9):
             self._insert_bigram_keystroke(repo, rid1, i, "e", "n", "n", "correct")
         for i in range(9, 11):
-            self._insert_bigram_keystroke(repo, rid1, i, "e", "n", "x", "cognitive_error")
+            self._insert_bigram_keystroke(
+                repo, rid1, i, "e", "n", "x", "cognitive_error"
+            )
         # Bigram (n, e): 5 correct + 5 errors = 50% error rate
         self._insert_seed(repo, rid2, "n")
         for i in range(1, 6):
             self._insert_bigram_keystroke(repo, rid2, i, "n", "e", "e", "correct")
         for i in range(6, 11):
-            self._insert_bigram_keystroke(repo, rid2, i, "n", "e", "x", "cognitive_error")
+            self._insert_bigram_keystroke(
+                repo, rid2, i, "n", "e", "x", "cognitive_error"
+            )
         result = repo.get_bigram_error_rates(min_count=5)
         assert len(result) == 2
         # Higher error rate first
@@ -1145,7 +1218,9 @@ class TestBigramErrorRates:
             self._insert_bigram_keystroke(repo, rid_words, i, "e", "n", "n", "correct")
         # 10 keystrokes in random_strings
         for i in range(1, 11):
-            self._insert_bigram_keystroke(repo, rid_strings, i, "e", "n", "n", "correct")
+            self._insert_bigram_keystroke(
+                repo, rid_strings, i, "e", "n", "n", "correct"
+            )
         # Without filter: 20 total
         result_all = repo.get_bigram_error_rates(min_count=5)
         assert result_all[0][3] == 20
@@ -1187,8 +1262,15 @@ class TestBigramTransitionTimes:
         repo.db.conn.commit()
 
     def _insert_bigram_keystroke(
-        self, repo, run_id, position, prev_char, expected, actual,
-        error_type="correct", rt=100,
+        self,
+        repo,
+        run_id,
+        position,
+        prev_char,
+        expected,
+        actual,
+        error_type="correct",
+        rt=100,
     ):
         repo.db.conn.execute(
             """INSERT INTO keystrokes
@@ -1196,8 +1278,17 @@ class TestBigramTransitionTimes:
                 actual_char, error_type, reaction_time_ms, prev_char,
                 is_backspace)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (run_id, position, 1000 + position * 100, expected, actual,
-             error_type, rt, prev_char, 0),
+            (
+                run_id,
+                position,
+                1000 + position * 100,
+                expected,
+                actual,
+                error_type,
+                rt,
+                prev_char,
+                0,
+            ),
         )
         repo.db.conn.commit()
 
@@ -1230,9 +1321,7 @@ class TestBigramTransitionTimes:
         rid = self._make_run(repo, sid)
         self._insert_seed(repo, rid, "e")
         for i in range(1, 11):
-            self._insert_bigram_keystroke(
-                repo, rid, i, "e", "n", "n", "correct", 100
-            )
+            self._insert_bigram_keystroke(repo, rid, i, "e", "n", "n", "correct", 100)
         # Add some errors — should be excluded
         self._insert_bigram_keystroke(
             repo, rid, 11, "e", "n", "x", "cognitive_error", 500
@@ -1247,9 +1336,7 @@ class TestBigramTransitionTimes:
         rid = self._make_run(repo, sid)
         self._insert_seed(repo, rid, "e")
         for i in range(1, 11):
-            self._insert_bigram_keystroke(
-                repo, rid, i, "e", "n", "n", "correct", 100
-            )
+            self._insert_bigram_keystroke(repo, rid, i, "e", "n", "n", "correct", 100)
         # Add keystroke with null RT
         repo.db.conn.execute(
             """INSERT INTO keystrokes
@@ -1271,9 +1358,7 @@ class TestBigramTransitionTimes:
         rid = self._make_run(repo, sid)
         self._insert_seed(repo, rid, "e")
         for i in range(1, 4):
-            self._insert_bigram_keystroke(
-                repo, rid, i, "e", "n", "n", "correct", 100
-            )
+            self._insert_bigram_keystroke(repo, rid, i, "e", "n", "n", "correct", 100)
         result = repo.get_bigram_transition_times(min_count=10)
         assert len(result) == 0
         result = repo.get_bigram_transition_times(min_count=3)
@@ -1288,15 +1373,11 @@ class TestBigramTransitionTimes:
         # Bigram (e, n): fast (100ms)
         self._insert_seed(repo, rid1, "e")
         for i in range(1, 11):
-            self._insert_bigram_keystroke(
-                repo, rid1, i, "e", "n", "n", "correct", 100
-            )
+            self._insert_bigram_keystroke(repo, rid1, i, "e", "n", "n", "correct", 100)
         # Bigram (n, e): slow (500ms)
         self._insert_seed(repo, rid2, "n")
         for i in range(1, 11):
-            self._insert_bigram_keystroke(
-                repo, rid2, i, "n", "e", "e", "correct", 500
-            )
+            self._insert_bigram_keystroke(repo, rid2, i, "n", "e", "e", "correct", 500)
         result = repo.get_bigram_transition_times(min_count=5)
         assert len(result) == 2
         # Slowest first
@@ -1312,7 +1393,9 @@ class TestBigramTransitionTimes:
         # pos 1: correct (e->n) — counted
         self._insert_bigram_keystroke(repo, rid, 1, "e", "n", "n", "correct", 100)
         # pos 2: error (n->e typed as x) — excluded (error, RT query only includes correct)
-        self._insert_bigram_keystroke(repo, rid, 2, "n", "e", "x", "cognitive_error", 200)
+        self._insert_bigram_keystroke(
+            repo, rid, 2, "n", "e", "x", "cognitive_error", 200
+        )
         # pos 3: correct (x->n) — excluded (prev was error)
         self._insert_bigram_keystroke(repo, rid, 3, "x", "n", "n", "correct", 300)
         # pos 4: correct (n->e) — counted (prev was correct)
@@ -1382,8 +1465,12 @@ class TestLetterOccurrenceSeries:
         return repo.save_run(run, session_id)
 
     def _insert_keystroke(
-        self, repo: Repository, run_id: int, position: int,
-        expected: str, error_type: str = "correct",
+        self,
+        repo: Repository,
+        run_id: int,
+        position: int,
+        expected: str,
+        error_type: str = "correct",
         is_backspace: int = 0,
     ) -> None:
         actual = expected if error_type == "correct" else "x"
@@ -1392,8 +1479,16 @@ class TestLetterOccurrenceSeries:
                (run_id, position, timestamp_ms, expected_char,
                 actual_char, error_type, reaction_time_ms, is_backspace)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (run_id, position, 1000 + position * 100, expected, actual,
-             error_type, 100, is_backspace),
+            (
+                run_id,
+                position,
+                1000 + position * 100,
+                expected,
+                actual,
+                error_type,
+                100,
+                is_backspace,
+            ),
         )
         repo.db.conn.commit()
 
@@ -1516,7 +1611,9 @@ class TestErrorWindow:
         return repo.save_run(run, session_id)
 
     def _insert_keystrokes(
-        self, repo: Repository, run_id: int,
+        self,
+        repo: Repository,
+        run_id: int,
         keystrokes_data: list[tuple[str, str]],
     ) -> None:
         """Insert keystroke records. Each item: (expected_char, error_type)."""
@@ -1633,7 +1730,10 @@ class TestHistoricalPositionRts:
         return repo.create_session(session)
 
     def _make_run(
-        self, repo: Repository, session_id: int, target_length: int = 40,
+        self,
+        repo: Repository,
+        session_id: int,
+        target_length: int = 40,
     ) -> int:
         run = RunResult(
             start_time=datetime.now(),
@@ -1644,9 +1744,14 @@ class TestHistoricalPositionRts:
         return repo.save_run(run, session_id)
 
     def _insert_keystroke(
-        self, repo: Repository, run_id: int, position: int,
-        expected: str, error_type: str = "correct",
-        rt: int | None = 200, is_backspace: int = 0,
+        self,
+        repo: Repository,
+        run_id: int,
+        position: int,
+        expected: str,
+        error_type: str = "correct",
+        rt: int | None = 200,
+        is_backspace: int = 0,
     ) -> None:
         actual = expected if error_type == "correct" else "x"
         repo.db.conn.execute(
@@ -1654,8 +1759,16 @@ class TestHistoricalPositionRts:
                (run_id, position, timestamp_ms, expected_char,
                 actual_char, error_type, reaction_time_ms, is_backspace)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (run_id, position, 1000 + position * 100, expected, actual,
-             error_type, rt, is_backspace),
+            (
+                run_id,
+                position,
+                1000 + position * 100,
+                expected,
+                actual,
+                error_type,
+                rt,
+                is_backspace,
+            ),
         )
         repo.db.conn.commit()
 
@@ -1694,7 +1807,8 @@ class TestHistoricalPositionRts:
             rid = self._make_run(repo, sid, target_length=40)
             self._insert_keystroke(repo, rid, 3, "e", "correct", 100 + i)
         result = repo.get_historical_position_rts(
-            min_target_length=40, n_runs=2,
+            min_target_length=40,
+            n_runs=2,
         )
         assert len(result) == 2
         # Should be from the two most recent runs (highest RTs: 103, 104)
@@ -1802,8 +1916,13 @@ class TestErrorTimeline:
         return repo.save_run(run, session_id)
 
     def _insert_keystroke(
-        self, repo: Repository, run_id: int, position: int,
-        expected: str, actual: str, error_type: str,
+        self,
+        repo: Repository,
+        run_id: int,
+        position: int,
+        expected: str,
+        actual: str,
+        error_type: str,
         is_backspace: int = 0,
     ) -> None:
         repo.db.conn.execute(
@@ -1811,8 +1930,16 @@ class TestErrorTimeline:
                (run_id, position, timestamp_ms, expected_char,
                 actual_char, error_type, reaction_time_ms, is_backspace)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (run_id, position, 1000 + position * 100, expected, actual,
-             error_type, 100, is_backspace),
+            (
+                run_id,
+                position,
+                1000 + position * 100,
+                expected,
+                actual,
+                error_type,
+                100,
+                is_backspace,
+            ),
         )
         repo.db.conn.commit()
 
@@ -1879,8 +2006,12 @@ class TestErrorTimeline:
         repo = make_repo(tmp_path)
         sid = self._make_session(repo)
         rid = self._make_run(repo, sid)
-        self._insert_keystroke(repo, rid, 0, "e", "n", "cognitive_error", is_backspace=1)
-        self._insert_keystroke(repo, rid, 1, "n", "e", "cognitive_error", is_backspace=0)
+        self._insert_keystroke(
+            repo, rid, 0, "e", "n", "cognitive_error", is_backspace=1
+        )
+        self._insert_keystroke(
+            repo, rid, 1, "n", "e", "cognitive_error", is_backspace=0
+        )
         result = repo.get_error_timeline()
         assert len(result) == 1
         assert result[0] == (rid, "n", "e", "cognitive_error", 1, 4)
@@ -1926,8 +2057,16 @@ class TestLastNFilter:
                (run_id, position, timestamp_ms, expected_char,
                 actual_char, error_type, reaction_time_ms, is_backspace)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (run_id, position, 1000 + position * 100, expected, actual,
-             error_type, 100, 0),
+            (
+                run_id,
+                position,
+                1000 + position * 100,
+                expected,
+                actual,
+                error_type,
+                100,
+                0,
+            ),
         )
         repo.db.conn.commit()
 
@@ -2138,3 +2277,446 @@ class TestLetterCountAtRuns:
         assert result[5] == (6, 4)
         # run 10: cumul=1000 -> still 4
         assert result[9] == (10, 4)
+
+
+class TestTrainingStatusMethods:
+    """Tests for repository methods used by TrainingStatusData."""
+
+    @staticmethod
+    def _make_run(
+        repo: Repository,
+        session_id: int,
+        *,
+        total_keystrokes: int = 50,
+        mode: RunMode = RunMode.RELEARNING,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+    ) -> int:
+        run = RunResult(
+            start_time=start_time or datetime.now(),
+            end_time=end_time,
+            mode=mode,
+            practice_type=PracticeType.RANDOM_STRINGS,
+            target_text="x" * total_keystrokes,
+            target_length=total_keystrokes,
+            total_keystrokes=total_keystrokes,
+            accuracy=1.0,
+        )
+        return repo.save_run(run, session_id)
+
+    @staticmethod
+    def _make_session(
+        repo: Repository,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+    ) -> int:
+        s = Session(
+            start_time=start_time or datetime.now(),
+            end_time=end_time,
+        )
+        return repo.create_session(s)
+
+    def test_get_total_runs_empty(self, tmp_path):
+        repo = make_repo(tmp_path)
+        assert repo.get_total_runs() == 0
+
+    def test_get_total_runs(self, tmp_path):
+        repo = make_repo(tmp_path)
+        sid = self._make_session(repo)
+        self._make_run(repo, sid)
+        self._make_run(repo, sid)
+        assert repo.get_total_runs() == 2
+
+    def test_get_runs_today(self, tmp_path):
+        repo = make_repo(tmp_path)
+        sid = self._make_session(repo)
+        # Run "today"
+        self._make_run(repo, sid, start_time=datetime.now())
+        # Run "yesterday" — insert directly to control date
+        repo.db.conn.execute(
+            """INSERT INTO runs
+               (session_id, start_time, total_keystrokes, accuracy,
+                target_text, target_length, mode, practice_type)
+               VALUES (?, '2020-01-01 10:00:00', 50, 1.0, 'xxx', 3,
+                       'relearning', 'random_strings')""",
+            (sid,),
+        )
+        repo.db.conn.commit()
+        assert repo.get_runs_today() == 1
+
+    def test_get_keystrokes_today(self, tmp_path):
+        repo = make_repo(tmp_path)
+        sid = self._make_session(repo)
+        self._make_run(repo, sid, total_keystrokes=100)
+        self._make_run(repo, sid, total_keystrokes=200)
+        assert repo.get_keystrokes_today() == 300
+
+    def test_get_total_training_time(self, tmp_path):
+        repo = make_repo(tmp_path)
+        sid = self._make_session(repo)
+        # 60-second run
+        self._make_run(
+            repo,
+            sid,
+            start_time=datetime(2026, 3, 1, 10, 0, 0),
+            end_time=datetime(2026, 3, 1, 10, 1, 0),
+        )
+        # 30-second run
+        self._make_run(
+            repo,
+            sid,
+            start_time=datetime(2026, 3, 1, 10, 2, 0),
+            end_time=datetime(2026, 3, 1, 10, 2, 30),
+        )
+        total = repo.get_total_training_time()
+        # julianday arithmetic may lose a sub-second fraction → allow ±1s
+        assert abs(total - 90) <= 1
+
+    def test_get_total_training_time_skips_null_end(self, tmp_path):
+        repo = make_repo(tmp_path)
+        sid = self._make_session(repo)
+        # Run without end_time
+        self._make_run(
+            repo,
+            sid,
+            start_time=datetime(2026, 3, 1, 10, 0, 0),
+            end_time=None,
+        )
+        assert repo.get_total_training_time() == 0
+
+    def test_get_total_elapsed_time(self, tmp_path):
+        repo = make_repo(tmp_path)
+        # Session with 1 hour span
+        sid = self._make_session(
+            repo,
+            start_time=datetime(2026, 3, 1, 10, 0, 0),
+            end_time=datetime(2026, 3, 1, 11, 0, 0),
+        )
+        # Need to update end_time manually since create_session doesn't store it
+        repo.update_session_end(sid, datetime(2026, 3, 1, 11, 0, 0))
+        total = repo.get_total_elapsed_time()
+        assert total == 3600
+
+    def test_get_total_elapsed_time_skips_open_session(self, tmp_path):
+        repo = make_repo(tmp_path)
+        # Session without end_time
+        self._make_session(repo, start_time=datetime(2026, 3, 1, 10, 0, 0))
+        assert repo.get_total_elapsed_time() == 0
+
+
+class TestRelearningOnlyMethods:
+    """Tests for relearning-mode-only keystroke and accuracy methods."""
+
+    @staticmethod
+    def _make_run_with_keystrokes(
+        repo: Repository,
+        session_id: int,
+        mode: RunMode,
+        keystrokes_data: list[tuple[str, str]],
+        practice_type: PracticeType = PracticeType.RANDOM_STRINGS,
+    ) -> int:
+        """Create a run with specific keystrokes.
+
+        keystrokes_data: list of (expected_char, error_type) pairs.
+        error_type is 'correct' or 'cognitive_error'.
+        """
+        total = len(keystrokes_data)
+        errors = sum(1 for _, et in keystrokes_data if et != "correct")
+        run = RunResult(
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            mode=mode,
+            practice_type=practice_type,
+            target_text="x" * total,
+            target_length=total,
+            total_keystrokes=total,
+            cognitive_errors=errors,
+            accuracy=(total - errors) / total if total > 0 else 1.0,
+            keystrokes=[
+                KeystrokeEvent(
+                    position=i,
+                    timestamp_ms=i * 100,
+                    expected_char=ec,
+                    actual_char=ec if et == "correct" else "z",
+                    error_type=ErrorType.CORRECT
+                    if et == "correct"
+                    else ErrorType.COGNITIVE_ERROR,
+                    is_backspace=False,
+                )
+                for i, (ec, et) in enumerate(keystrokes_data)
+            ],
+        )
+        return repo.save_run(run, session_id)
+
+    def test_get_total_keystrokes_relearning_empty(self, tmp_path):
+        repo = make_repo(tmp_path)
+        assert repo.get_total_keystrokes_relearning() == 0
+
+    def test_get_total_keystrokes_relearning_filters_mode(self, tmp_path):
+        repo = make_repo(tmp_path)
+        sid = repo.create_session(Session(start_time=datetime.now()))
+
+        # Relearning run: 100 keystrokes
+        run_r = RunResult(
+            start_time=datetime.now(),
+            mode=RunMode.RELEARNING,
+            practice_type=PracticeType.RANDOM_STRINGS,
+            target_text="x" * 100,
+            target_length=100,
+            total_keystrokes=100,
+            accuracy=1.0,
+        )
+        repo.save_run(run_r, sid)
+
+        # Speed run: 200 keystrokes
+        run_s = RunResult(
+            start_time=datetime.now(),
+            mode=RunMode.SPEED,
+            practice_type=PracticeType.RANDOM_WORDS,
+            target_text="x" * 200,
+            target_length=200,
+            total_keystrokes=200,
+            accuracy=1.0,
+        )
+        repo.save_run(run_s, sid)
+
+        assert repo.get_total_keystrokes_relearning() == 100
+        assert repo.get_total_keystrokes_all() == 300
+
+    def test_rolling_accuracy_relearning_only(self, tmp_path):
+        repo = make_repo(tmp_path)
+        sid = repo.create_session(Session(start_time=datetime.now()))
+
+        # Relearning run: 'a' with 8/10 correct
+        self._make_run_with_keystrokes(
+            repo,
+            sid,
+            RunMode.RELEARNING,
+            [("a", "correct")] * 8 + [("a", "cognitive_error")] * 2,
+        )
+
+        # Speed run: 'a' all correct (should be ignored)
+        self._make_run_with_keystrokes(
+            repo,
+            sid,
+            RunMode.SPEED,
+            [("a", "correct")] * 20,
+        )
+
+        result = repo.get_per_letter_rolling_accuracy_relearning(["a"], window=200)
+        acc, count = result["a"]
+        assert count == 10  # only relearning keystrokes
+        assert abs(acc - 0.8) < 0.01
+
+    def test_rolling_accuracy_relearning_empty(self, tmp_path):
+        repo = make_repo(tmp_path)
+        result = repo.get_per_letter_rolling_accuracy_relearning(["a"], window=200)
+        acc, count = result["a"]
+        assert count == 0
+        assert acc == 1.0
+
+    def test_total_keystrokes_excludes_fix_keys(self, tmp_path):
+        """Fix Keys runs (mode=relearning, practice_type=fix_keys) must not
+        count toward letter unlocking keystroke totals."""
+        repo = make_repo(tmp_path)
+        sid = repo.create_session(Session(start_time=datetime.now()))
+
+        # Learn Keys run: 100 keystrokes
+        run_learn = RunResult(
+            start_time=datetime.now(),
+            mode=RunMode.RELEARNING,
+            practice_type=PracticeType.RANDOM_STRINGS,
+            target_text="x" * 100,
+            target_length=100,
+            total_keystrokes=100,
+            accuracy=1.0,
+        )
+        repo.save_run(run_learn, sid)
+
+        # Fix Keys run: 150 keystrokes (same mode, different practice_type)
+        run_fix = RunResult(
+            start_time=datetime.now(),
+            mode=RunMode.RELEARNING,
+            practice_type=PracticeType.FIX_KEYS,
+            target_text="x" * 150,
+            target_length=150,
+            total_keystrokes=150,
+            accuracy=1.0,
+        )
+        repo.save_run(run_fix, sid)
+
+        assert repo.get_total_keystrokes_relearning() == 100
+        assert repo.get_total_keystrokes_all() == 250
+
+    def test_rolling_accuracy_excludes_fix_keys(self, tmp_path):
+        """Fix Keys keystrokes must not influence Learn Keys rolling accuracy."""
+        repo = make_repo(tmp_path)
+        sid = repo.create_session(Session(start_time=datetime.now()))
+
+        # Learn Keys run: 'a' with 8/10 correct
+        self._make_run_with_keystrokes(
+            repo,
+            sid,
+            RunMode.RELEARNING,
+            [("a", "correct")] * 8 + [("a", "cognitive_error")] * 2,
+            practice_type=PracticeType.RANDOM_STRINGS,
+        )
+
+        # Fix Keys run: 'a' all correct (should be ignored)
+        self._make_run_with_keystrokes(
+            repo,
+            sid,
+            RunMode.RELEARNING,
+            [("a", "correct")] * 20,
+            practice_type=PracticeType.FIX_KEYS,
+        )
+
+        result = repo.get_per_letter_rolling_accuracy_relearning(["a"], window=200)
+        acc, count = result["a"]
+        assert count == 10  # only Learn Keys keystrokes
+        assert abs(acc - 0.8) < 0.01
+
+
+class TestPerLetterRunCounts:
+    """Tests for get_per_letter_run_counts()."""
+
+    def test_empty(self, tmp_path):
+        repo = make_repo(tmp_path)
+        assert repo.get_per_letter_run_counts() == {}
+
+    def test_counts_distinct_runs(self, tmp_path):
+        repo = make_repo(tmp_path)
+        sid = repo.create_session(Session(start_time=datetime.now()))
+
+        # Run 1: letters a, b
+        run1 = RunResult(
+            start_time=datetime.now(),
+            mode=RunMode.RELEARNING,
+            practice_type=PracticeType.RANDOM_STRINGS,
+            target_text="ab",
+            target_length=2,
+            total_keystrokes=2,
+            accuracy=1.0,
+            keystrokes=[
+                KeystrokeEvent(
+                    position=0,
+                    timestamp_ms=100,
+                    expected_char="a",
+                    actual_char="a",
+                    error_type=ErrorType.CORRECT,
+                    is_backspace=False,
+                ),
+                KeystrokeEvent(
+                    position=1,
+                    timestamp_ms=200,
+                    expected_char="b",
+                    actual_char="b",
+                    error_type=ErrorType.CORRECT,
+                    is_backspace=False,
+                ),
+            ],
+        )
+        repo.save_run(run1, sid)
+
+        # Run 2: letters a, c
+        run2 = RunResult(
+            start_time=datetime.now(),
+            mode=RunMode.RELEARNING,
+            practice_type=PracticeType.RANDOM_STRINGS,
+            target_text="ac",
+            target_length=2,
+            total_keystrokes=2,
+            accuracy=1.0,
+            keystrokes=[
+                KeystrokeEvent(
+                    position=0,
+                    timestamp_ms=100,
+                    expected_char="a",
+                    actual_char="a",
+                    error_type=ErrorType.CORRECT,
+                    is_backspace=False,
+                ),
+                KeystrokeEvent(
+                    position=1,
+                    timestamp_ms=200,
+                    expected_char="c",
+                    actual_char="c",
+                    error_type=ErrorType.CORRECT,
+                    is_backspace=False,
+                ),
+            ],
+        )
+        repo.save_run(run2, sid)
+
+        counts = repo.get_per_letter_run_counts()
+        assert counts["a"] == 2  # appeared in both runs
+        assert counts["b"] == 1  # only run 1
+        assert counts["c"] == 1  # only run 2
+
+
+class TestErrorWindowLearnKeysOnly:
+    """Tests for get_per_letter_error_window(learn_keys_only=True)."""
+
+    def test_excludes_non_learn_keys(self, tmp_path):
+        repo = make_repo(tmp_path)
+        sid = repo.create_session(Session(start_time=datetime.now()))
+
+        # Learn Keys run: 'a' = 3 correct + 1 error
+        learn_run = RunResult(
+            start_time=datetime.now(),
+            mode=RunMode.RELEARNING,
+            practice_type=PracticeType.RANDOM_STRINGS,
+            target_text="aaaa",
+            target_length=4,
+            total_keystrokes=4,
+            cognitive_errors=1,
+            accuracy=0.75,
+            keystrokes=[
+                KeystrokeEvent(
+                    position=i,
+                    timestamp_ms=i * 100,
+                    expected_char="a",
+                    actual_char="a" if i < 3 else "z",
+                    error_type=(
+                        ErrorType.CORRECT if i < 3 else ErrorType.COGNITIVE_ERROR
+                    ),
+                    is_backspace=False,
+                )
+                for i in range(4)
+            ],
+        )
+        repo.save_run(learn_run, sid)
+
+        # Fix Keys run: 'a' = 5 errors (should be excluded)
+        fix_run = RunResult(
+            start_time=datetime.now(),
+            mode=RunMode.RELEARNING,
+            practice_type=PracticeType.FIX_KEYS,
+            target_text="aaaaa",
+            target_length=5,
+            total_keystrokes=5,
+            cognitive_errors=5,
+            accuracy=0.0,
+            keystrokes=[
+                KeystrokeEvent(
+                    position=i,
+                    timestamp_ms=i * 100,
+                    expected_char="a",
+                    actual_char="z",
+                    error_type=ErrorType.COGNITIVE_ERROR,
+                    is_backspace=False,
+                )
+                for i in range(5)
+            ],
+        )
+        repo.save_run(fix_run, sid)
+
+        # Without filter: 4 + 5 = 9 keystrokes
+        result_all = repo.get_per_letter_error_window(["a"], 200)
+        assert len(result_all["a"]) == 9
+
+        # With learn_keys_only: only 4 keystrokes
+        result_lk = repo.get_per_letter_error_window(["a"], 200, learn_keys_only=True)
+        assert len(result_lk["a"]) == 4
+        # 3 correct then 1 error (chronological)
+        assert result_lk["a"] == [False, False, False, True]

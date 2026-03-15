@@ -48,7 +48,7 @@ class TextGenerator:
             language = self.config.language
 
         match practice_type:
-            case PracticeType.RANDOM_STRINGS:
+            case PracticeType.RANDOM_STRINGS | PracticeType.FIX_KEYS:
                 text = self._generate_random_strings(length, active_letters, language)
             case PracticeType.RANDOM_WORDS:
                 text = self._generate_random_words(length, active_letters, language)

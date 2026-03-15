@@ -84,9 +84,7 @@ class LetterManager:
                 return letter
         return None
 
-    def initialize_first_letters(
-        self, count: int = 2
-    ) -> dict[str, LetterStats]:
+    def initialize_first_letters(self, count: int = 2) -> dict[str, LetterStats]:
         """Create the initial active letter set for a new user.
 
         Starts with the N most frequent letters.
@@ -136,12 +134,20 @@ class LetterManager:
             (s.keystrokes_at_introduction for s in active_letters.values()),
             default=0,
         )
-        result.keystrokes_since_introduction = total_keystrokes - max_ks_at_intro
+        result.keystrokes_since_introduction = max(
+            0, total_keystrokes - max_ks_at_intro
+        )
 
         # Check 1: Total keystrokes since last introduction
-        volume_ok = result.keystrokes_since_introduction >= self.config.advancement_min_keystrokes
+        volume_ok = (
+            result.keystrokes_since_introduction
+            >= self.config.advancement_min_keystrokes
+        )
         if not volume_ok:
-            remaining = self.config.advancement_min_keystrokes - result.keystrokes_since_introduction
+            remaining = (
+                self.config.advancement_min_keystrokes
+                - result.keystrokes_since_introduction
+            )
             result.reasons.append(f"Need {remaining} more keystrokes.")
 
         # Check 2: Per-letter rolling accuracy
@@ -182,14 +188,11 @@ class LetterManager:
 
         if result.per_letter_issues:
             result.reasons.append(
-                "Accuracy too low for: "
-                + ", ".join(result.per_letter_issues)
+                "Accuracy too low for: " + ", ".join(result.per_letter_issues)
             )
 
         result.can_advance = (
-            volume_ok
-            and all_letters_ok
-            and len(result.per_letter_issues) == 0
+            volume_ok and all_letters_ok and len(result.per_letter_issues) == 0
         )
         return result
 
@@ -301,19 +304,14 @@ class LetterManager:
             was_practiced = letter in per_letter_errors
             if was_practiced:
                 if session_letter_accuracy >= self.config.advancement_accuracy:
-                    stats.stability_score = min(
-                        1.0, stats.stability_score + 0.2
-                    )
+                    stats.stability_score = min(1.0, stats.stability_score + 0.2)
                 else:
-                    stats.stability_score = max(
-                        0.0, stats.stability_score - 0.1
-                    )
+                    stats.stability_score = max(0.0, stats.stability_score - 0.1)
                     # Revert STABLE to CONSOLIDATING if stability dropped
                     # below the review threshold — the motor pattern is no
                     # longer reliably encoded.
                     if (
-                        stats.stability_score
-                        < self.config.stability_revert_threshold
+                        stats.stability_score < self.config.stability_revert_threshold
                         and stats.state == LetterState.STABLE
                     ):
                         stats.state = LetterState.CONSOLIDATING
@@ -325,11 +323,18 @@ class LetterManager:
             # - Actually practiced this session
             # - Rolling accuracy >= advancement_accuracy
             # All modes (relearning, speed, transition) count equally.
+            #
+            # TODO: Mastery is reached too quickly.  The current system
+            # increments mastery_score by (qualifying_ks / mastery_ks_required)
+            # each session, which can reach the threshold in ~2-3 sessions
+            # for common letters.  Consider requiring *sustained* high
+            # precision over multiple sessions (e.g. N consecutive sessions
+            # above threshold) or a time-based requirement (e.g. must be
+            # STABLE for >= 7 days before mastery promotion).
             if (
                 was_practiced
                 and stats.state in (LetterState.STABLE, LetterState.MASTERED)
-                and stats.rolling_error_rate
-                <= (1.0 - self.config.advancement_accuracy)
+                and stats.rolling_error_rate <= (1.0 - self.config.advancement_accuracy)
             ):
                 qualifying_ks = session.per_letter_keystrokes(letter)
                 if qualifying_ks > 0:
@@ -440,9 +445,7 @@ class LetterManager:
 
         # Check if any letter is in the introducing state
         introducing_letters = [
-            s
-            for s in active_letters.values()
-            if s.state == LetterState.INTRODUCING
+            s for s in active_letters.values() if s.state == LetterState.INTRODUCING
         ]
 
         if not introducing_letters:

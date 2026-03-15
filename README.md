@@ -1,32 +1,76 @@
 # Typing Trainer
 
-A desktop typing trainer built on motor learning principles. No gamification, no badges, no streaks — just systematic training to build correct finger-to-key motor patterns, consolidate them to automaticity, then push for speed.
+A desktop typing trainer built on motor learning principles. No gamification, no badges, no streaks — just systematic training to build correct finger-to-key motor patterns.
 
 ![Training screen](docs/screenshots/training_screen.png)
 
-## Philosophy
+## How It Works
 
-Speed and accuracy are treated as separate phases. Accuracy is never sacrificed for speed. The tool introduces letters one at a time, enforces accuracy thresholds before progression, and only unlocks speed training once all active letters are consolidated. Speed emerges from correct patterns, not from rushing through errors.
+If you want to learn typing on a keyboard, this program is for you.
 
-## Features
+I built it when I switched to a split keyboard and had to relearn everything. I could type okay on a normal keyboard but never learned proper touch typing.
 
-- **Three training phases**: Relearning (accuracy-first, backspace disabled) → Speed (adaptive WPM staircase) → Transition (bigram-targeted practice)
-- **Adaptive letter introduction**: Curated QWERTZ-optimized order, auto-advances when per-letter rolling accuracy reaches 95%
-- **Error classification**: Cognitive errors, motor overflow (<80ms same-key), burst repeats (stuck keys), swap detection (transposed pairs)
-- **Letter state machine**: Introducing → Consolidating → Stable → Mastered, with automatic degradation on accuracy drops
-- **Mastery system**: Long-term motor pattern tracking with Ebbinghaus-curve decay modeling — mastery builds over ~60 sessions of qualifying practice
-- **Speed staircase**: +2 WPM on pass, -4 WPM on fail — converges to a 67% success equilibrium
-- **Transition training**: Select slow or error-prone bigrams from analytics, practice with contextual interference (target bigrams in real words)
-- **Analytics dashboard**: Accuracy trends, WPM history, per-letter breakdown, error type distribution, bigram heatmap, position analysis
-- **Spaced repetition**: Time-based decay on unused letters with configurable half-lives
-- **QWERTZ layout** with German and English language support (lowercase only in v1)
-- **Dark theme**, keyboard-driven UI (Return to continue, Escape to abort)
+This program is based on motor learning theory. Learning to type means learning a motor skill. Motor skills develop in three stages:
 
-## Requirements
+**1. Cognitive stage:** Every movement requires conscious effort. Even pressing a single letter takes real thought.
+Precision is key. Every keypress trains your brain — including the wrong ones. Especially in this early stage, errors get baked in to some degree. Therefore: precision before speed.
 
-- Python >= 3.14
-- PyQt6 >= 6.7
-- pyqtgraph >= 0.13
+**2. Associative stage:** Movements start to become easier. Your finger begins to know where to go before you consciously think about it. But you can still be easily distracted. Speed comes from your motor system learning to plan ahead and chain letters together — not from trying to move faster.
+
+**3. Autonomous stage:** With enough training, typing becomes effortless — as natural as speaking.
+
+---
+
+### Learn Keys
+
+Random letters are generated. No real words — your brain needs to build motor patterns for individual keys first. Backspace is disabled to force commitment to each keystroke.
+
+**Important:** Take your time. Be precise. Letters are introduced one by one. A new letter is unlocked when:
+- All previous letters have >95% precision over the last 200 keypresses
+- At least 500 keypresses have passed since the last unlock
+
+Letters are weighted: new letters and those with low precision appear more often.
+
+**Hints:**
+- Practice daily. Short daily sessions beat long occasional ones — even with the same total practice time.
+- Use medium-length runs with short breaks in between.
+- If you notice increasing errors or your timing becomes erratic, take a real break. Practicing while mentally fatigued doesn't help.
+- Sit comfortably.
+- Try saying, whispering, or mouthing the letters as you type. This often helps with precision in this stage.
+- Letters are truly random. There is no profanity filter.
+
+### Fix Keys *(optional)*
+
+Select a few specific letters to train them in isolation. Default selection: a mix of your weakest and a few strong letters.
+
+### Build Speed
+
+Real words instead of random letters. I'd recommend finishing Learn Keys first — meaning: all letters unlocked.
+
+By that point, you'll likely be partially in the associative stage already. This mode lets you practice with real language, where your brain already knows the words.
+
+Don't force speed. Keep focusing on accuracy — speed emerges on its own as your motor system learns to plan ahead and chain movements together.
+
+### Smooth Pairs *(optional)*
+
+Slow letter pairs (bigrams) can be a bottleneck for speed. In this mode, words are selected to contain specific bigrams you want to practice. For very slow bigrams, you can also practice them as isolated pairs before moving to words.
+
+Which bigrams to train can be chosen in the analysis view, based on your speed and error data.
+
+### Keyboard Shortcuts
+
+- **Return/Enter** — Start a run from the config screen, or continue from the summary screen
+- **Escape** (double-press) — Abort the current run (discarded, not saved)
+
+### Display Modes
+
+The display mode selector at the top of the window controls how much detail is shown:
+
+- **Basic** — Training panel only. Minimal run summary, no sidebar or analytics.
+- **Nerd** — Sidebar with training status and letter overview. Core analytics charts. Per-letter breakdown in run summary.
+- **Extreme Nerd** — Everything visible: all analytics charts, intra-run speed chart, error deep-dives. Proceed with caution. Some plots might not carry much information but rather statistical noise.
+
+---
 
 ## Installation
 
@@ -48,27 +92,11 @@ If you don't have `uv`, install it first:
 pip install uv
 ```
 
-## Usage
+### Requirements
 
-### Getting started
-
-The trainer starts with two letters (`e` and `n` for German). Type the displayed text as accurately as possible. New letters are introduced automatically when:
-
-- Every active letter has >= 95% accuracy over a rolling 200-keystroke window
-- At least 500 total keystrokes have been typed since the last introduction
-
-### Training modes
-
-**Relearning** — The default mode. Backspace is disabled to force commitment to each keystroke. Focus entirely on accuracy. Runs fail automatically if accuracy drops below the threshold.
-
-**Speed** — Unlocks when all letters reach Stable state and the last 5 sessions have >= 95% accuracy. An adaptive WPM target increases on success and decreases on failure. Backspace is enabled, but accuracy is still scored on first input per position.
-
-**Transition** — Same entry conditions as Speed. Open the Analysis tab, find slow or error-prone bigrams in the heatmap, select 1-3 targets, and start a transition run. The generated text interleaves words containing target bigrams with normal words.
-
-### Keyboard shortcuts
-
-- **Return/Enter** — Start a run from the config screen, or continue from the summary screen
-- **Escape** (double-press) — Abort the current run (discarded, not saved)
+- Python >= 3.14
+- PyQt6 >= 6.7
+- pyqtgraph >= 0.13
 
 ## Configuration
 
@@ -97,7 +125,16 @@ The database is portable. Copy the `training-data/` folder to migrate to another
 
 ## Development
 
-### Project structure
+### Technical Overview
+
+- **Error classification**: Cognitive errors, motor overflow (<80ms same-key), burst repeats (stuck keys), swap detection (transposed pairs)
+- **Letter state machine**: Introducing → Consolidating → Stable → Mastered, with automatic degradation on accuracy drops
+- **Speed staircase**: +2 WPM on pass, -4 WPM on fail — converges to a 67% success equilibrium
+- **Spaced repetition**: Time-based decay on unused letters with configurable half-lives
+- **QWERTZ layout** with German and English language support (lowercase only in v1)
+- **Dark theme**, keyboard-driven UI
+
+### Project Structure
 
 ```
 src/typing_trainer/
@@ -107,16 +144,16 @@ src/typing_trainer/
   core/                  # Engine, text generator, letter manager, error classifier, speed manager
   storage/               # SQLite database + repository layer
   ui/                    # PyQt6 widgets, theme, charts
-tests/                   # 326 tests
+tests/                   # 411 tests
 ```
 
-### Running tests
+### Running Tests
 
 ```bash
 uv run pytest tests/ -q --tb=short
 ```
 
-### Type checking
+### Type Checking
 
 ```bash
 npx pyright src/ tests/

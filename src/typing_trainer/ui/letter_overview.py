@@ -36,10 +36,7 @@ from typing_trainer.ui.theme import (
 
 
 STATE_LABELS = {
-    state: name
-    for state, name in [
-        (s, s.value.capitalize()) for s in STATE_COLORS
-    ]
+    state: name for state, name in [(s, s.value.capitalize()) for s in STATE_COLORS]
 }
 
 
@@ -72,7 +69,9 @@ class LetterOverviewWidget(QWidget):
         # Legend
         legend = QHBoxLayout()
         for state, color in STATE_COLORS.items():
-            label = QLabel(f'<span style="color: {color};">&#9679;</span> {STATE_LABELS[state]}')
+            label = QLabel(
+                f'<span style="color: {color};">&#9679;</span> {STATE_LABELS[state]}'
+            )
             label.setFont(app_font(10))
             legend.addWidget(label)
         legend.addStretch()
@@ -83,14 +82,20 @@ class LetterOverviewWidget(QWidget):
         self._table.setFont(app_font(11))
         self._table.setColumnCount(8)
         self._table.setHorizontalHeaderLabels(
-            ["Letter", "State", "Keystrokes", "Last Err", "Rolling Err",
-             "Stability", "Mastery", "Sessions"]
+            [
+                "Letter",
+                "State",
+                "Keystrokes",
+                "Last Err",
+                "Rolling Err",
+                "Stability",
+                "Mastery",
+                "Runs",
+            ]
         )
         header = self._table.horizontalHeader()
         assert header is not None
-        header.setSectionResizeMode(
-            QHeaderView.ResizeMode.Stretch
-        )
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         self._table.setSortingEnabled(True)
@@ -101,6 +106,7 @@ class LetterOverviewWidget(QWidget):
         active_letters: dict[str, LetterStats],
         remaining_letters: list[str] | None = None,
         keystroke_counts: dict[str, int] | None = None,
+        run_counts: dict[str, int] | None = None,
     ) -> None:
         """Refresh the table with current letter states.
 
@@ -111,6 +117,8 @@ class LetterOverviewWidget(QWidget):
                 active letters.
             keystroke_counts: Total all-time keystrokes per letter (from
                 :meth:`Repository.get_per_letter_error_rates`).
+            run_counts: Number of distinct runs each letter appeared in
+                (from :meth:`Repository.get_per_letter_run_counts`).
         """
         # Disable sorting while populating to avoid crashes
         self._table.setSortingEnabled(False)
@@ -152,9 +160,7 @@ class LetterOverviewWidget(QWidget):
 
             # Rolling error rate (2000-keystroke window)
             rolling_val = stats.rolling_error_rate_long
-            rolling_err_item = _NumericTableItem(
-                f"{rolling_val:.1%}", rolling_val
-            )
+            rolling_err_item = _NumericTableItem(f"{rolling_val:.1%}", rolling_val)
             if rolling_val > 0.08:
                 rolling_err_item.setForeground(QColor(COLOR_ERROR))
             elif rolling_val > 0.05:
@@ -175,12 +181,11 @@ class LetterOverviewWidget(QWidget):
                 mastery_item.setForeground(QColor(COLOR_MASTERED))
             self._table.setItem(row, 6, mastery_item)
 
-            # Sessions since introduced
-            sess_val = float(stats.sessions_since_introduced)
-            sessions_item = _NumericTableItem(
-                str(stats.sessions_since_introduced), sess_val
-            )
-            self._table.setItem(row, 7, sessions_item)
+            # Runs (distinct runs this letter appeared in)
+            rc = run_counts or {}
+            runs_val = rc.get(letter, 0)
+            runs_item = _NumericTableItem(str(runs_val), float(runs_val))
+            self._table.setItem(row, 7, runs_item)
 
         # Locked (not yet introduced) letters — grey placeholder rows
         # Use sort values that push them to the bottom (high for asc, low

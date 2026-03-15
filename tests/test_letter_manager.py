@@ -697,3 +697,68 @@ class TestRecheckAllStates:
         assert manager.recheck_all_states(active) is True
         assert active["e"].state == LetterState.DEGRADED
         assert active["n"].state == LetterState.STABLE
+
+
+class TestAdvancementGuard:
+    """Test the max(0, ...) guard on keystrokes_since_introduction.
+
+    When switching from all-mode to relearning-only keystroke totals,
+    total_keystrokes may be less than keystrokes_at_introduction
+    (which was recorded under the old all-mode regime).
+    The guard ensures keystrokes_since_introduction never goes negative.
+    """
+
+    def test_negative_keystrokes_since_introduction_clamped_to_zero(self):
+        config = Config(
+            advancement_accuracy=0.95,
+            advancement_min_keystrokes=500,
+            advancement_accuracy_window=200,
+        )
+        manager = LetterManager(config)
+
+        # keystrokes_at_introduction was set when all-mode total was 1000,
+        # but now total_keystrokes is relearning-only = 300
+        active = {
+            "e": LetterStats(
+                letter="e",
+                keystrokes_at_introduction=0,
+            ),
+            "n": LetterStats(
+                letter="n",
+                keystrokes_at_introduction=1000,
+            ),
+        }
+        rolling = {
+            "e": (0.98, 200),
+            "n": (0.98, 200),
+        }
+        result = manager.check_advancement(active, rolling, total_keystrokes=300)
+        # max_ks_at_intro = 1000, total = 300 -> would be -700 without guard
+        assert result.keystrokes_since_introduction == 0
+        assert not result.can_advance  # 0 < 500
+
+    def test_positive_keystrokes_since_introduction_unchanged(self):
+        config = Config(
+            advancement_accuracy=0.95,
+            advancement_min_keystrokes=100,
+            advancement_accuracy_window=200,
+        )
+        manager = LetterManager(config)
+
+        active = {
+            "e": LetterStats(
+                letter="e",
+                keystrokes_at_introduction=0,
+            ),
+            "n": LetterStats(
+                letter="n",
+                keystrokes_at_introduction=200,
+            ),
+        }
+        rolling = {
+            "e": (0.98, 200),
+            "n": (0.98, 200),
+        }
+        result = manager.check_advancement(active, rolling, total_keystrokes=500)
+        # max_ks_at_intro = 200, total = 500 -> 300 (positive, unchanged)
+        assert result.keystrokes_since_introduction == 300

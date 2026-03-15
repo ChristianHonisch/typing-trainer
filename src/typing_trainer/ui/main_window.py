@@ -13,11 +13,12 @@ Analysis tab disabled during typing runs.
 from __future__ import annotations
 
 from datetime import datetime
-from pathlib import Path
 
 from PyQt6.QtCore import QTimer, Qt
 from PyQt6.QtWidgets import (
+    QComboBox,
     QHBoxLayout,
+    QLabel,
     QMainWindow,
     QSplitter,
     QStackedWidget,
@@ -32,14 +33,20 @@ from typing_trainer.core.letter_manager import LetterManager
 from typing_trainer.core.spaced_repetition import SpacedRepetition
 from typing_trainer.core.speed_manager import SpeedManager
 from typing_trainer.core.text_generator import TextGenerator
-from typing_trainer.models.letter_state import LetterState, LetterStats, PracticeType, RunMode
+from typing_trainer.models.letter_state import (
+    DisplayMode,
+    LetterState,
+    LetterStats,
+    PracticeType,
+    RunMode,
+)
 from typing_trainer.models.session import Session
 from typing_trainer.storage.database import Database
 from typing_trainer.storage.repository import Repository
 from typing_trainer.ui.letter_overview import LetterOverviewWidget
 from typing_trainer.ui.run_config_widget import RunConfigWidget
 from typing_trainer.ui.run_summary_widget import RunSummaryWidget
-from typing_trainer.ui.session_dashboard import SessionDashboard
+from typing_trainer.ui.session_dashboard import SessionDashboard, TrainingStatusData
 from typing_trainer.ui.theme import (
     COLOR_BG_CURSOR,
     COLOR_BG_DARK,
@@ -119,15 +126,41 @@ class MainWindow(QMainWindow):
         # Central widget
         central = QWidget()
         self.setCentralWidget(central)
-        main_layout = QHBoxLayout(central)
+        outer_layout = QVBoxLayout(central)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(0)
+
+        # Display mode selector at the very top
+        display_bar = QHBoxLayout()
+        display_bar.setContentsMargins(8, 4, 8, 4)
+        display_label = QLabel("Display:")
+        display_label.setFont(app_font(10))
+        display_bar.addWidget(display_label)
+
+        self._display_mode_combo = QComboBox()
+        self._display_mode_combo.setFont(app_font(10))
+        self._display_mode_combo.addItem("Basic", DisplayMode.BASIC)
+        self._display_mode_combo.addItem("Nerd", DisplayMode.NERD)
+        self._display_mode_combo.addItem("Extreme Nerd", DisplayMode.EXTREME_NERD)
+        # Default to Nerd
+        self._display_mode_combo.setCurrentIndex(1)
+        self._display_mode_combo.currentIndexChanged.connect(
+            self._on_display_mode_changed
+        )
+        display_bar.addWidget(self._display_mode_combo)
+        display_bar.addStretch()
+        outer_layout.addLayout(display_bar)
+
+        # Main content area
+        main_layout = QHBoxLayout()
         main_layout.setContentsMargins(0, 0, 0, 0)
 
         # Splitter: sidebar | main area
-        splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._splitter = QSplitter(Qt.Orientation.Horizontal)
 
         # Left sidebar
-        sidebar = QWidget()
-        sidebar_layout = QVBoxLayout(sidebar)
+        self._sidebar = QWidget()
+        sidebar_layout = QVBoxLayout(self._sidebar)
         sidebar_layout.setContentsMargins(5, 5, 5, 5)
 
         self._session_dashboard = SessionDashboard()
@@ -136,7 +169,7 @@ class MainWindow(QMainWindow):
         self._letter_overview = LetterOverviewWidget()
         sidebar_layout.addWidget(self._letter_overview)
 
-        splitter.addWidget(sidebar)
+        self._splitter.addWidget(self._sidebar)
 
         # Main area: top-level tab widget (Training | Analysis)
         self._main_tabs = QTabWidget()
@@ -168,19 +201,21 @@ class MainWindow(QMainWindow):
         self._main_tabs.addTab(self._analytics, "Analysis")
 
         # Wire bigram chart selection -> run config + auto-switch to Training
-        self._analytics.bigram_chart.bigrams_selected.connect(
-            self._on_bigrams_selected
-        )
+        self._analytics.bigram_chart.bigrams_selected.connect(self._on_bigrams_selected)
 
-        splitter.addWidget(self._main_tabs)
+        self._splitter.addWidget(self._main_tabs)
 
         # Set initial sizes (sidebar ~300px, main area fills rest)
-        splitter.setSizes([300, 700])
-        main_layout.addWidget(splitter)
+        self._splitter.setSizes([300, 700])
+        main_layout.addWidget(self._splitter)
+        outer_layout.addLayout(main_layout, stretch=1)
 
         # Show config page
         self._stack.setCurrentIndex(0)
         self._config_widget.setFocus()
+
+        # Apply initial display mode
+        self._apply_display_mode()
 
         # Dark theme
         self.setStyleSheet(
@@ -263,7 +298,10 @@ class MainWindow(QMainWindow):
 
     def _end_session(self) -> None:
         """End the current session."""
-        if self._current_session is not None and self._current_session.session_id is not None:
+        if (
+            self._current_session is not None
+            and self._current_session.session_id is not None
+        ):
             self.repo.update_session_end(
                 self._current_session.session_id, datetime.now()
             )
@@ -284,11 +322,39 @@ class MainWindow(QMainWindow):
         if index == 1:  # Analysis tab
             self._analytics.refresh(self.repo)
 
+    # ------------------------------------------------------------------
+    # Display mode
+    # ------------------------------------------------------------------
+
+    def _current_display_mode(self) -> DisplayMode:
+        """Get the currently selected display mode."""
+        data = self._display_mode_combo.currentData()
+        if isinstance(data, DisplayMode):
+            return data
+        return DisplayMode.NERD
+
+    def _on_display_mode_changed(self, _index: int) -> None:
+        """Handle display mode combo change."""
+        self._apply_display_mode()
+
+    def _apply_display_mode(self) -> None:
+        """Show/hide UI elements based on the current display mode."""
+        mode = self._current_display_mode()
+
+        # Sidebar (session dashboard + letter overview)
+        self._sidebar.setVisible(mode != DisplayMode.BASIC)
+
+        # Analysis tab
+        self._main_tabs.setTabVisible(1, mode != DisplayMode.BASIC)
+        self._analytics.set_display_mode(mode)
+
+        # Run summary sections
+        self._summary_widget.set_display_mode(mode)
+
     def _check_session_timeout(self) -> None:
         """Check if the session has timed out due to inactivity."""
-        if (
-            self._current_session is not None
-            and self._current_session.is_expired(self.config.session_timeout_minutes)
+        if self._current_session is not None and self._current_session.is_expired(
+            self.config.session_timeout_minutes
         ):
             self._end_session()
             self._ensure_session()
@@ -319,15 +385,20 @@ class MainWindow(QMainWindow):
 
         # Letter overview (uses rolling_error_rate_long)
         remaining = [
-            ch for ch in self.letter_mgr.introduction_order
+            ch
+            for ch in self.letter_mgr.introduction_order
             if ch not in self._active_letters
         ]
         error_rates = self.repo.get_per_letter_error_rates()
         keystroke_counts = {
             letter: total for letter, (_, total, _) in error_rates.items()
         }
+        run_counts = self.repo.get_per_letter_run_counts()
         self._letter_overview.update_display(
-            self._active_letters, remaining, keystroke_counts,
+            self._active_letters,
+            remaining,
+            keystroke_counts,
+            run_counts,
         )
 
         # Config widget letter display
@@ -343,44 +414,69 @@ class MainWindow(QMainWindow):
         )
         # Transition mode: same entry conditions as speed, plus bigrams selected
         transition_available = (
-            speed_available
-            and len(self._config_widget.get_selected_bigrams()) > 0
+            speed_available and len(self._config_widget.get_selected_bigrams()) > 0
         )
         self._config_widget.update_letter_display(
             self._active_letters, speed_available, transition_available
         )
 
-        # Session dashboard — compute training times
-        session_active_s = 0
+        # Session dashboard — build TrainingStatusData
+        session_runs = 0
+        session_keystrokes = 0
+        session_training_s = 0
         session_elapsed_s = 0
         if self._current_session is not None:
+            session_runs = self._current_session.run_count
+            session_keystrokes = self._current_session.total_cognitive_keystrokes
             for run in self._current_session.runs:
                 if run.start_time is not None and run.end_time is not None:
-                    session_active_s += int(
+                    session_training_s += int(
                         (run.end_time - run.start_time).total_seconds()
                     )
             if self._current_session.start_time is not None:
                 session_elapsed_s = int(
                     (datetime.now() - self._current_session.start_time).total_seconds()
                 )
-        today_s = self.repo.get_training_time_today()
-        self._session_dashboard.update_session_info(
-            self._current_session, session_active_s, session_elapsed_s, today_s
-        )
 
-        # Advancement check
-        total_keystrokes = self.repo.get_total_keystrokes_all()
+        status_data = TrainingStatusData(
+            session_runs=session_runs,
+            session_keystrokes=session_keystrokes,
+            session_training_s=session_training_s,
+            session_elapsed_s=session_elapsed_s,
+            today_runs=self.repo.get_runs_today(),
+            today_keystrokes=self.repo.get_keystrokes_today(),
+            today_training_s=self.repo.get_training_time_today(),
+            today_elapsed_s=self.repo.get_elapsed_time_today(),
+            total_runs=self.repo.get_total_runs(),
+            total_keystrokes=self.repo.get_total_keystrokes_all(),
+            total_training_s=self.repo.get_total_training_time(),
+            total_elapsed_s=self.repo.get_total_elapsed_time(),
+        )
+        self._session_dashboard.update_session_info(status_data)
+
+        # Advancement check — only relearning-mode keystrokes count
+        total_keystrokes_relearning = self.repo.get_total_keystrokes_relearning()
+        rolling_accuracy_relearning = (
+            self.repo.get_per_letter_rolling_accuracy_relearning(
+                active_letter_list, self.config.advancement_accuracy_window
+            )
+        )
         advancement = self.letter_mgr.check_advancement(
-            self._active_letters, rolling_accuracy, total_keystrokes
+            self._active_letters,
+            rolling_accuracy_relearning,
+            total_keystrokes_relearning,
         )
         blocked_letters = [
-            p.letter for p in advancement.per_letter_progress
+            p.letter
+            for p in advancement.per_letter_progress
             if p.has_enough_data and not p.meets_accuracy
         ]
         error_window: dict[str, list[bool]] = {}
         if blocked_letters:
             error_window = self.repo.get_per_letter_error_window(
-                blocked_letters, self.config.advancement_accuracy_window
+                blocked_letters,
+                self.config.advancement_accuracy_window,
+                learn_keys_only=True,
             )
         self._session_dashboard.update_advancement(advancement, error_window)
 
@@ -396,42 +492,37 @@ class MainWindow(QMainWindow):
         alerts: list[str] = []
         due_letters = self.spaced_rep.get_due_letters(self._active_letters)
         if due_letters:
-            alerts.append(
-                f"Letters due for review: {', '.join(due_letters)}"
-            )
+            alerts.append(f"Letters due for review: {', '.join(due_letters)}")
         if advancement.can_advance and advancement.next_letter:
-            alerts.append(
-                f"Ready to introduce letter '{advancement.next_letter}'!"
-            )
+            alerts.append(f"Ready to introduce letter '{advancement.next_letter}'!")
         self._config_widget.set_alerts(alerts)
 
     def _on_bigrams_selected(self, bigrams: list[tuple[str, str]]) -> None:
         """Handle bigram selection from the analytics bigram chart.
 
         Transfers the selection to the run config widget, switches to
-        the Training tab, and sets the mode to Transition.
+        the Training tab, and sets the preset to Smooth Pairs.
         """
         self._config_widget.set_selected_bigrams(bigrams)
         # Switch to Training tab
         self._main_tabs.setCurrentIndex(0)
         self._stack.setCurrentIndex(0)
         self._config_widget.setFocus()
-        # Auto-select transition mode
-        for i in range(self._config_widget._mode_combo.count()):
-            if self._config_widget._mode_combo.itemData(i) == RunMode.TRANSITION:
-                self._config_widget._mode_combo.setCurrentIndex(i)
-                break
+        # Auto-select Smooth Pairs preset
+        idx = self._config_widget._preset_combo.findText("Smooth Pairs")
+        if idx >= 0:
+            self._config_widget._preset_combo.setCurrentIndex(idx)
 
-    def _on_start_run(self, length: int, mode: RunMode, practice_type: PracticeType) -> None:
+    def _on_start_run(
+        self, length: int, mode: RunMode, practice_type: PracticeType
+    ) -> None:
         """Start a new typing run."""
         self._ensure_session()
         if self._current_session is not None:
             self._current_session.touch()
 
         # Determine fail threshold
-        fail_threshold = self.letter_mgr.get_fail_threshold(
-            self._active_letters, mode
-        )
+        fail_threshold = self.letter_mgr.get_fail_threshold(self._active_letters, mode)
 
         # Set target bigrams on text generator for transition mode
         if mode == RunMode.TRANSITION:
@@ -440,9 +531,7 @@ class MainWindow(QMainWindow):
 
         # Generate text using selected letters (user may have deselected some)
         selected_letters = self._config_widget.get_selected_letters()
-        target_text = self.text_gen.generate(
-            practice_type, length, selected_letters
-        )
+        target_text = self.text_gen.generate(practice_type, length, selected_letters)
 
         if not target_text:
             return
@@ -469,12 +558,16 @@ class MainWindow(QMainWindow):
         typing_widget.start_run()
 
     def _check_and_apply_advancement(self) -> None:
-        """Check advancement criteria and introduce next letter if ready."""
+        """Check advancement criteria and introduce next letter if ready.
+
+        Only relearning-mode keystrokes count toward letter unlocking
+        (both rolling accuracy AND keystroke volume threshold).
+        """
         active_letter_list = list(self._active_letters.keys())
-        rolling_accuracy = self.repo.get_per_letter_rolling_accuracy(
+        rolling_accuracy = self.repo.get_per_letter_rolling_accuracy_relearning(
             active_letter_list, self.config.advancement_accuracy_window
         )
-        total_keystrokes = self.repo.get_total_keystrokes_all()
+        total_keystrokes = self.repo.get_total_keystrokes_relearning()
         advancement = self.letter_mgr.check_advancement(
             self._active_letters, rolling_accuracy, total_keystrokes
         )
@@ -489,7 +582,10 @@ class MainWindow(QMainWindow):
         result = self.engine.finish_run()
 
         # Save to database
-        if self._current_session is not None and self._current_session.session_id is not None:
+        if (
+            self._current_session is not None
+            and self._current_session.session_id is not None
+        ):
             self.repo.save_run(result, self._current_session.session_id)
             self._current_session.add_run(result)
 
@@ -509,9 +605,7 @@ class MainWindow(QMainWindow):
         # Update per-letter error rates in active letters from this run
         for letter, per_letter in result.per_letter.items():
             if letter in self._active_letters:
-                self._active_letters[letter].error_rate_latest = (
-                    per_letter.error_rate
-                )
+                self._active_letters[letter].error_rate_latest = per_letter.error_rate
                 self._active_letters[letter].last_practiced = datetime.now()
 
         # Process speed run if applicable
@@ -580,8 +674,6 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:  # type: ignore[override]
         """Clean up on window close."""
         self._end_session()
-        self.repo.save_speed_state(
-            self.speed_mgr.target_wpm, self.speed_mgr.best_wpm
-        )
+        self.repo.save_speed_state(self.speed_mgr.target_wpm, self.speed_mgr.best_wpm)
         self.db.close()
         super().closeEvent(event)

@@ -48,6 +48,22 @@ class ErrorType(enum.Enum):
     with >50% being errors. Excluded from accuracy like motor overflow."""
 
 
+class DisplayMode(enum.Enum):
+    """UI detail level.
+
+    Controls which panels, charts, and statistics are visible.
+    """
+
+    BASIC = "basic"
+    """Training panel only, minimal run summary, no sidebar or analytics."""
+
+    NERD = "nerd"
+    """Sidebar, per-letter run summary, core analytics charts."""
+
+    EXTREME_NERD = "extreme_nerd"
+    """Everything visible: all analytics, intra-run speed chart."""
+
+
 class RunMode(enum.Enum):
     """Mode of a typing run."""
 
@@ -68,6 +84,8 @@ class PracticeType(enum.Enum):
     BIGRAM_WORDS = "bigram_words"
     """Real words selected to contain target bigram transitions,
     interleaved with normal words for contextual interference."""
+    FIX_KEYS = "fix_keys"
+    """Random strings focused on error-prone letters."""
 
 
 @dataclass
@@ -154,9 +172,7 @@ class LetterStats:
                 ):
                     # Linear decay: full bonus at 0 sessions, 0 at threshold
                     return recently_stable * (
-                        1.0
-                        - self.sessions_in_current_state
-                        / recently_stable_sessions
+                        1.0 - self.sessions_in_current_state / recently_stable_sessions
                     )
                 return 0.0
 
