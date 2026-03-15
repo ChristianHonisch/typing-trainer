@@ -102,7 +102,9 @@ class CursorOverlayTextEdit(QTextEdit):
             painter.fillRect(highlight_rect, QColor(COLOR_BG_CURSOR))
 
             # Draw the character (or middle-dot for space)
-            display_char = "\u00b7" if self._highlight_char == " " else self._highlight_char
+            display_char = (
+                "\u00b7" if self._highlight_char == " " else self._highlight_char
+            )
             painter.setFont(font)
             painter.setPen(QPen(QColor(COLOR_TEXT_BRIGHT)))
             painter.drawText(highlight_rect, Qt.AlignmentFlag.AlignCenter, display_char)
@@ -217,9 +219,21 @@ class TypingWidget(QWidget):
         self._timer.start()
         self._render_text()
         self._update_stats()
-        mode_text = self.engine.state.mode.value.upper()
-        practice_text = self.engine.state.practice_type.value.replace("_", " ")
-        self._mode_label.setText(f"{mode_text} | {practice_text}")
+        # Map internal mode/practice to user-facing preset names
+        _PRESET_NAMES = {
+            ("relearning", "random_strings"): "Learn Keys",
+            ("relearning", "fix_keys"): "Fix Keys",
+            ("speed", "random_words"): "Build Speed",
+            ("transition", "bigram_words"): "Smooth Pairs",
+        }
+        key = (self.engine.state.mode.value, self.engine.state.practice_type.value)
+        preset_name = _PRESET_NAMES.get(key)
+        if preset_name is not None:
+            self._mode_label.setText(preset_name)
+        else:
+            mode_text = self.engine.state.mode.value.replace("_", " ").title()
+            practice_text = self.engine.state.practice_type.value.replace("_", " ")
+            self._mode_label.setText(f"{mode_text} | {practice_text}")
         self._status_label.setText("Start typing...")
         self.setFocus()
 
@@ -374,8 +388,12 @@ class TypingWidget(QWidget):
                 self._status_label.setText(
                     "Run FAILED - accuracy dropped below threshold"
                 )
-                self._status_label.setStyleSheet(f"color: {COLOR_ERROR}; font-weight: bold;")
+                self._status_label.setStyleSheet(
+                    f"color: {COLOR_ERROR}; font-weight: bold;"
+                )
             else:
                 self._status_label.setText("Run complete!")
-                self._status_label.setStyleSheet(f"color: {COLOR_SUCCESS}; font-weight: bold;")
+                self._status_label.setStyleSheet(
+                    f"color: {COLOR_SUCCESS}; font-weight: bold;"
+                )
             self.run_finished.emit()

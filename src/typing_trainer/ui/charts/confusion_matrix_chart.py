@@ -88,9 +88,7 @@ class ConfusionMatrixChart(QWidget):
             label_text = _CATEGORY_LABELS[cat]  # type: ignore[index]
             swatch = QLabel()
             swatch.setFixedSize(12, 12)
-            swatch.setStyleSheet(
-                f"background-color: {color}; border: 1px solid #555;"
-            )
+            swatch.setStyleSheet(f"background-color: {color}; border: 1px solid #555;")
             text = QLabel(label_text)
             text.setFont(app_font(9))
             text.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY};")
@@ -117,6 +115,13 @@ class ConfusionMatrixChart(QWidget):
 
         layout.addLayout(legend_layout)
 
+        self._empty_label = QLabel("No confusion data yet.")
+        self._empty_label.setFont(app_font(11))
+        self._empty_label.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY};")
+        self._empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty_label.setVisible(False)
+        layout.addWidget(self._empty_label)
+
         # Splitter: bar chart (top) + heatmap (bottom)
         splitter = QSplitter(Qt.Orientation.Vertical)
 
@@ -124,12 +129,8 @@ class ConfusionMatrixChart(QWidget):
         self._bar_plot = pg.PlotWidget()
         self._bar_plot.setBackground(COLOR_BG_DARK)
         self._bar_plot.showGrid(x=True, y=False, alpha=0.15)
-        self._bar_plot.setLabel(
-            "bottom", "Confusion Rate %", color=COLOR_TEXT_PRIMARY
-        )
-        self._bar_plot.setLabel(
-            "left", "Confusion Pair", color=COLOR_TEXT_PRIMARY
-        )
+        self._bar_plot.setLabel("bottom", "Confusion Rate %", color=COLOR_TEXT_PRIMARY)
+        self._bar_plot.setLabel("left", "Confusion Pair", color=COLOR_TEXT_PRIMARY)
         self._bar_plot.getAxis("left").setTextPen(COLOR_TEXT_SECONDARY)
         self._bar_plot.getAxis("bottom").setTextPen(COLOR_TEXT_SECONDARY)
         splitter.addWidget(self._bar_plot)
@@ -141,12 +142,8 @@ class ConfusionMatrixChart(QWidget):
 
         self._heat_plot = pg.PlotWidget()
         self._heat_plot.setBackground(COLOR_BG_DARK)
-        self._heat_plot.setLabel(
-            "bottom", "Typed (actual)", color=COLOR_TEXT_PRIMARY
-        )
-        self._heat_plot.setLabel(
-            "left", "Expected", color=COLOR_TEXT_PRIMARY
-        )
+        self._heat_plot.setLabel("bottom", "Typed (actual)", color=COLOR_TEXT_PRIMARY)
+        self._heat_plot.setLabel("left", "Expected", color=COLOR_TEXT_PRIMARY)
         self._heat_plot.getAxis("left").setTextPen(COLOR_TEXT_SECONDARY)
         self._heat_plot.getAxis("bottom").setTextPen(COLOR_TEXT_SECONDARY)
         heat_layout.addWidget(self._heat_plot)
@@ -155,7 +152,8 @@ class ConfusionMatrixChart(QWidget):
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 2)
 
-        layout.addWidget(splitter)
+        self._splitter = splitter
+        layout.addWidget(self._splitter)
 
     def _get_last_n(self) -> int | None:
         """Return the last_n filter value, or None if unchecked."""
@@ -184,7 +182,11 @@ class ConfusionMatrixChart(QWidget):
         last_n = self._get_last_n()
         pairs = self._repo.get_confusion_pairs(last_n=last_n)
         if not pairs:
+            self._empty_label.setVisible(True)
+            self._splitter.setVisible(False)
             return
+        self._empty_label.setVisible(False)
+        self._splitter.setVisible(True)
 
         # Get total keystrokes per letter for normalization
         error_rates = self._repo.get_per_letter_error_rates(last_n=last_n)
@@ -197,8 +199,7 @@ class ConfusionMatrixChart(QWidget):
         filtered: list[tuple[str, str, int]] = [
             (exp, act, cnt)
             for exp, act, cnt in pairs
-            if letter_totals.get(exp, 0) >= _MIN_KEYSTROKES
-            and cnt >= _MIN_OCCURRENCES
+            if letter_totals.get(exp, 0) >= _MIN_KEYSTROKES and cnt >= _MIN_OCCURRENCES
         ]
 
         if not filtered:
@@ -233,9 +234,7 @@ class ConfusionMatrixChart(QWidget):
             return
 
         y_positions = np.arange(n, dtype=np.float64)
-        widths = np.array(
-            [rate * 100 for _, _, _, rate in top], dtype=np.float64
-        )
+        widths = np.array([rate * 100 for _, _, _, rate in top], dtype=np.float64)
 
         brushes = []
         for expected, actual, _, _ in top:
@@ -287,13 +286,11 @@ class ConfusionMatrixChart(QWidget):
 
         # Build rate matrix (confusion rate per pair)
         rate_matrix = np.zeros((n, n), dtype=np.float64)
-        count_matrix = np.zeros((n, n), dtype=np.float64)
         for expected, actual, count in pairs:
             row = letter_to_idx[expected]
             col = letter_to_idx[actual]
             total = letter_totals.get(expected, 0)
             rate_matrix[row, col] = (count / total * 100) if total > 0 else 0.0
-            count_matrix[row, col] = count
 
         # Normalize rate to 0-255 for color mapping
         max_rate = rate_matrix.max()
@@ -324,9 +321,7 @@ class ConfusionMatrixChart(QWidget):
         # Set axis ticks
         display_labels = ["SPC" if l == " " else l for l in sorted_letters]
         # Center ticks at 0.5, 1.5, etc.
-        tick_positions = [
-            (i + 0.5, label) for i, label in enumerate(display_labels)
-        ]
+        tick_positions = [(i + 0.5, label) for i, label in enumerate(display_labels)]
         self._heat_plot.getAxis("bottom").setTicks([tick_positions])
         self._heat_plot.getAxis("left").setTicks([tick_positions])
 

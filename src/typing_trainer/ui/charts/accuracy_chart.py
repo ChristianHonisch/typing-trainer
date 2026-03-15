@@ -11,7 +11,8 @@ from __future__ import annotations
 import numpy as np
 import pyqtgraph as pg
 
-from PyQt6.QtWidgets import QVBoxLayout, QWidget
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from typing_trainer.storage.repository import Repository
 from typing_trainer.ui.theme import (
@@ -21,6 +22,7 @@ from typing_trainer.ui.theme import (
     COLOR_TEXT_PRIMARY,
     COLOR_TEXT_SECONDARY,
     COLOR_WARNING,
+    app_font,
 )
 
 _COLOR_LETTERS = "#888888"
@@ -51,7 +53,8 @@ class AccuracyChart(QWidget):
         # Second Y-axis (right) for active letter count
         self._right_vb = pg.ViewBox()
         plot_item = self._plot.plotItem
-        assert plot_item is not None
+        if plot_item is None:
+            return
         plot_item.showAxis("right")
         plot_item.scene().addItem(self._right_vb)
         plot_item.getAxis("right").linkToView(self._right_vb)
@@ -61,16 +64,26 @@ class AccuracyChart(QWidget):
 
         # Keep right ViewBox geometry in sync
         vb = plot_item.vb
-        assert vb is not None
+        if vb is None:
+            return
         vb.sigResized.connect(self._update_right_vb)
+
+        self._empty_label = QLabel("No runs recorded yet.")
+        self._empty_label.setFont(app_font(11))
+        self._empty_label.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY};")
+        self._empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty_label.setVisible(False)
+        layout.addWidget(self._empty_label)
 
         layout.addWidget(self._plot)
 
     def _update_right_vb(self) -> None:
         plot_item = self._plot.plotItem
-        assert plot_item is not None
+        if plot_item is None:
+            return
         vb = plot_item.vb
-        assert vb is not None
+        if vb is None:
+            return
         self._right_vb.setGeometry(vb.sceneBoundingRect())
 
     def refresh(self, repo: Repository) -> None:
@@ -80,7 +93,11 @@ class AccuracyChart(QWidget):
 
         runs = repo.get_all_runs_summary()
         if not runs:
+            self._empty_label.setVisible(True)
+            self._plot.setVisible(False)
             return
+        self._empty_label.setVisible(False)
+        self._plot.setVisible(True)
 
         # Separate passed and failed runs
         x_all = np.array([i + 1 for i in range(len(runs))], dtype=np.float64)
@@ -89,9 +106,7 @@ class AccuracyChart(QWidget):
         x_failed = np.array(
             [i + 1 for i, r in enumerate(runs) if r.failed], dtype=np.float64
         )
-        y_failed = np.array(
-            [r.accuracy for r in runs if r.failed], dtype=np.float64
-        )
+        y_failed = np.array([r.accuracy for r in runs if r.failed], dtype=np.float64)
 
         # Main accuracy line
         self._plot.plot(
@@ -153,14 +168,14 @@ class AccuracyChart(QWidget):
             )
             self._right_vb.addItem(letters_curve)
 
-            counts_arr = np.array(
-                [c for _, c in letter_counts], dtype=np.float64
-            )
+            counts_arr = np.array([c for _, c in letter_counts], dtype=np.float64)
             count_min = float(counts_arr.min())
             count_max = float(counts_arr.max())
             padding = max(1, (count_max - count_min) * 0.15)
             self._right_vb.setYRange(
-                count_min - padding, count_max + padding, padding=0,
+                count_min - padding,
+                count_max + padding,
+                padding=0,
             )
 
         # Auto-range left y-axis

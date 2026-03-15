@@ -99,6 +99,8 @@ CREATE TABLE IF NOT EXISTS speed_state (
 CREATE INDEX IF NOT EXISTS idx_runs_session ON runs(session_id);
 CREATE INDEX IF NOT EXISTS idx_keystrokes_run ON keystrokes(run_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_start ON sessions(start_time);
+CREATE INDEX IF NOT EXISTS idx_keystrokes_expected_error
+    ON keystrokes(expected_char, error_type, is_backspace);
 """
 
 
@@ -140,8 +142,7 @@ class Database:
         """Apply column migrations for schema evolution."""
         # Add keystrokes_at_introduction column to letter_states (v2)
         ls_columns = {
-            row[1]
-            for row in self.conn.execute("PRAGMA table_info(letter_states)")
+            row[1] for row in self.conn.execute("PRAGMA table_info(letter_states)")
         }
         if "keystrokes_at_introduction" not in ls_columns:
             self.conn.execute(
@@ -151,10 +152,7 @@ class Database:
             self.conn.commit()
 
         # Add burst_repeat_count and swap_count columns to runs (v3)
-        runs_columns = {
-            row[1]
-            for row in self.conn.execute("PRAGMA table_info(runs)")
-        }
+        runs_columns = {row[1] for row in self.conn.execute("PRAGMA table_info(runs)")}
         if "burst_repeat_count" not in runs_columns:
             self.conn.execute(
                 "ALTER TABLE runs ADD COLUMN "
@@ -163,8 +161,7 @@ class Database:
             self.conn.commit()
         if "swap_count" not in runs_columns:
             self.conn.execute(
-                "ALTER TABLE runs ADD COLUMN "
-                "swap_count INTEGER NOT NULL DEFAULT 0"
+                "ALTER TABLE runs ADD COLUMN swap_count INTEGER NOT NULL DEFAULT 0"
             )
             self.conn.commit()
 
@@ -175,6 +172,14 @@ class Database:
         self.conn.execute(
             "UPDATE letter_states SET stability_score = 0.3 "
             "WHERE state = 'introducing' AND stability_score >= 1.0"
+        )
+        self.conn.commit()
+
+        # Add composite index for per-letter queries (v3b).
+        # Covers rolling accuracy, error windows, error rates, etc.
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_keystrokes_expected_error "
+            "ON keystrokes(expected_char, error_type, is_backspace)"
         )
         self.conn.commit()
 
@@ -206,8 +211,7 @@ class Database:
         # Detect: runs labeled random_words whose target text uses ≤2
         # distinct non-space characters — impossible for real words.
         rows = self.conn.execute(
-            "SELECT id, target_text FROM runs "
-            "WHERE practice_type = 'random_words'"
+            "SELECT id, target_text FROM runs WHERE practice_type = 'random_words'"
         ).fetchall()
         mislabeled_ids = []
         for row in rows:

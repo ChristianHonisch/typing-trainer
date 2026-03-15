@@ -18,7 +18,7 @@ import numpy as np
 import pyqtgraph as pg
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from typing_trainer.config import Config
 from typing_trainer.storage.repository import Repository
@@ -46,11 +46,19 @@ class ErrorWindowChart(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(5, 5, 5, 5)
 
+        self._empty_label = QLabel("No error window data yet.")
+        self._empty_label.setFont(app_font(11))
+        self._empty_label.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY};")
+        self._empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty_label.setVisible(False)
+        layout.addWidget(self._empty_label)
+
         self._plot = pg.PlotWidget()
         self._plot.setBackground(COLOR_BG_DARK)
         self._plot.showGrid(x=True, y=False, alpha=0.15)
         self._plot.setLabel(
-            "bottom", "Position in window (oldest \u2192 newest)",
+            "bottom",
+            "Position in window (oldest \u2192 newest)",
             color=COLOR_TEXT_PRIMARY,
         )
         self._plot.getAxis("left").setTextPen(COLOR_TEXT_SECONDARY)
@@ -73,7 +81,11 @@ class ErrorWindowChart(QWidget):
 
         error_window = repo.get_per_letter_error_window(letters, window)
         if not error_window:
+            self._empty_label.setVisible(True)
+            self._plot.setVisible(False)
             return
+        self._empty_label.setVisible(False)
+        self._plot.setVisible(True)
 
         # Filter to letters that actually have data, sort alphabetically
         letters_with_data = sorted(error_window.keys())
@@ -103,10 +115,14 @@ class ErrorWindowChart(QWidget):
 
             # Compute annotation
             if n_errors <= max_errors:
-                annotations.append((
-                    float(seq_len + 2), float(row_idx),
-                    "\u2713", COLOR_SUCCESS,
-                ))
+                annotations.append(
+                    (
+                        float(seq_len + 2),
+                        float(row_idx),
+                        "\u2713",
+                        COLOR_SUCCESS,
+                    )
+                )
             else:
                 # How many correct keystrokes needed?
                 # We need to push out enough old errors so that only
@@ -134,10 +150,14 @@ class ErrorWindowChart(QWidget):
                     grow_room = window - seq_len
                     keystrokes_needed = max(0, last_excess_pos + 1 - grow_room)
 
-                annotations.append((
-                    float(max(seq_len, window) + 2), float(row_idx),
-                    f"need {keystrokes_needed}", COLOR_WARNING,
-                ))
+                annotations.append(
+                    (
+                        float(max(seq_len, window) + 2),
+                        float(row_idx),
+                        f"need {keystrokes_needed}",
+                        COLOR_WARNING,
+                    )
+                )
 
         # ── Draw error markers ──
         if err_x:
@@ -167,7 +187,9 @@ class ErrorWindowChart(QWidget):
 
         # ── Y-axis: letter labels ──
         left_axis = self._plot.getAxis("left")
-        ticks = [(float(i), letter.upper()) for i, letter in enumerate(letters_with_data)]
+        ticks = [
+            (float(i), letter.upper()) for i, letter in enumerate(letters_with_data)
+        ]
         left_axis.setTicks([ticks, []])  # suppress auto/minor ticks
         left_axis.setStyle(tickFont=app_font(11))
 

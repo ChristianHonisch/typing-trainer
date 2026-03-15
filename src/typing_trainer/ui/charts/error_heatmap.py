@@ -16,6 +16,7 @@ from collections import defaultdict
 import numpy as np
 import pyqtgraph as pg
 
+from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QCheckBox,
@@ -81,9 +82,7 @@ class ErrorHeatmap(QWidget):
             label_text = _CATEGORY_LABELS[cat]
             swatch = QLabel()
             swatch.setFixedSize(12, 12)
-            swatch.setStyleSheet(
-                f"background-color: {color}; border: 1px solid #555;"
-            )
+            swatch.setStyleSheet(f"background-color: {color}; border: 1px solid #555;")
             text = QLabel(label_text)
             text.setFont(app_font(9))
             text.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY};")
@@ -109,6 +108,13 @@ class ErrorHeatmap(QWidget):
         filter_layout.addWidget(self._limit_spin)
 
         layout.addLayout(filter_layout)
+
+        self._empty_label = QLabel("No error data yet.")
+        self._empty_label.setFont(app_font(11))
+        self._empty_label.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY};")
+        self._empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty_label.setVisible(False)
+        layout.addWidget(self._empty_label)
 
         self._plot = pg.PlotWidget()
         self._plot.setBackground(COLOR_BG_DARK)
@@ -146,7 +152,11 @@ class ErrorHeatmap(QWidget):
         last_n = self._get_last_n()
         error_rates = self._repo.get_per_letter_error_rates(last_n=last_n)
         if not error_rates:
+            self._empty_label.setVisible(True)
+            self._plot.setVisible(False)
             return
+        self._empty_label.setVisible(False)
+        self._plot.setVisible(True)
 
         # Get confusion pairs to classify error types per letter
         confusion_pairs = self._repo.get_confusion_pairs(last_n=last_n)
@@ -167,7 +177,6 @@ class ErrorHeatmap(QWidget):
 
         letters = [letter for letter, _ in sorted_letters]
         totals = [data[1] for _, data in sorted_letters]
-        total_errors = [data[0] for _, data in sorted_letters]
 
         n = len(letters)
         x = np.arange(n, dtype=np.float64)
@@ -203,7 +212,7 @@ class ErrorHeatmap(QWidget):
         self._plot.getAxis("bottom").setTicks(ticks)
 
         # Add text labels showing total count on top of each bar
-        for i, (errors, total) in enumerate(zip(total_errors, totals)):
+        for i, total in enumerate(totals):
             top = float(bottoms[i])
             text = pg.TextItem(
                 f"n={total}",

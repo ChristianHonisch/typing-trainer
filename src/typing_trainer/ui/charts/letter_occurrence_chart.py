@@ -10,7 +10,8 @@ from __future__ import annotations
 import pyqtgraph as pg
 import numpy as np
 
-from PyQt6.QtWidgets import QVBoxLayout, QWidget
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from typing_trainer.storage.repository import Repository
 from typing_trainer.ui.charts.interactive_legend import InteractiveLegend
@@ -65,6 +66,13 @@ class LetterOccurrenceChart(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(5, 5, 5, 5)
 
+        self._empty_label = QLabel("No occurrence data yet.")
+        self._empty_label.setFont(app_font(11))
+        self._empty_label.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY};")
+        self._empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty_label.setVisible(False)
+        layout.addWidget(self._empty_label)
+
         self._plot = pg.PlotWidget()
         self._plot.setBackground(COLOR_BG_DARK)
         self._plot.showGrid(x=True, y=True, alpha=0.15)
@@ -81,7 +89,11 @@ class LetterOccurrenceChart(QWidget):
 
         series = repo.get_per_letter_occurrence_series()
         if not series:
+            self._empty_label.setVisible(True)
+            self._plot.setVisible(False)
             return
+        self._empty_label.setVisible(False)
+        self._plot.setVisible(True)
 
         # Collect all letters that appear anywhere
         all_letters: set[str] = set()
@@ -98,7 +110,9 @@ class LetterOccurrenceChart(QWidget):
         curves: dict[str, pg.PlotDataItem] = {}
 
         legend = self._plot.addLegend(
-            offset=(-10, 10), labelTextSize="9pt", colCount=2,
+            offset=(-10, 10),
+            labelTextSize="9pt",
+            colCount=2,
         )
         legend.setBrush(pg.mkBrush(30, 30, 30, 180))
 

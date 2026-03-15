@@ -76,19 +76,16 @@ class SpeedManager:
             check.reasons.append("No active letters.")
             return check
 
-        all_stable = all(
-            s.state == LetterState.STABLE for s in active_letters.values()
-        )
+        _SPEED_ELIGIBLE = (LetterState.STABLE, LetterState.MASTERED)
+        all_stable = all(s.state in _SPEED_ELIGIBLE for s in active_letters.values())
         check.all_stable = all_stable
         if not all_stable:
             non_stable = [
                 f"'{s.letter}' ({s.state.value})"
                 for s in active_letters.values()
-                if s.state != LetterState.STABLE
+                if s.state not in _SPEED_ELIGIBLE
             ]
-            check.reasons.append(
-                f"Letters not stable: {', '.join(non_stable)}"
-            )
+            check.reasons.append(f"Letters not stable: {', '.join(non_stable)}")
 
         # Check 5 consecutive sessions at 95%+
         qualifying = 0
@@ -176,7 +173,8 @@ class SpeedManager:
                     KeySpeedDiagnostic(
                         letter=letter,
                         mean_rt_ms=stats.mean_reaction_time_ms,
-                        is_bottleneck=stats.mean_reaction_time_ms > bottleneck_threshold,
+                        is_bottleneck=stats.mean_reaction_time_ms
+                        > bottleneck_threshold,
                     )
                 )
 

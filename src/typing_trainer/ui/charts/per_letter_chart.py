@@ -9,9 +9,11 @@ from __future__ import annotations
 import numpy as np
 import pyqtgraph as pg
 
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QCheckBox,
     QHBoxLayout,
+    QLabel,
     QVBoxLayout,
     QWidget,
 )
@@ -25,6 +27,8 @@ from typing_trainer.ui.theme import (
     COLOR_WARNING,
     app_font,
 )
+
+_EMPTY_MSG = "No per-letter data yet."
 
 # Distinct colors for up to ~12 letters (enough for a long time)
 _LETTER_COLORS = [
@@ -68,6 +72,14 @@ class PerLetterChart(QWidget):
         self._checkbox_container.setFixedWidth(80)
         outer.addWidget(self._checkbox_container)
 
+        # Empty label
+        self._empty_label = QLabel(_EMPTY_MSG)
+        self._empty_label.setFont(app_font(11))
+        self._empty_label.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY};")
+        self._empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty_label.setVisible(False)
+        outer.addWidget(self._empty_label)
+
         # Right: plot
         self._plot = pg.PlotWidget()
         self._plot.setBackground(COLOR_BG_DARK)
@@ -85,6 +97,15 @@ class PerLetterChart(QWidget):
 
         # Get all letters that have keystroke data
         error_rates = repo.get_per_letter_error_rates()
+        if not error_rates:
+            self._empty_label.setVisible(True)
+            self._plot.setVisible(False)
+            self._checkbox_container.setVisible(False)
+            return
+        self._empty_label.setVisible(False)
+        self._plot.setVisible(True)
+        self._checkbox_container.setVisible(True)
+
         letters = sorted(error_rates.keys())
 
         # Assign stable colors

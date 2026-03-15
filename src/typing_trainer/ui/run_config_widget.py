@@ -24,7 +24,12 @@ from PyQt6.QtWidgets import (
 )
 
 from typing_trainer.config import Config
-from typing_trainer.models.letter_state import LetterState, LetterStats, PracticeType, RunMode
+from typing_trainer.models.letter_state import (
+    LetterState,
+    LetterStats,
+    PracticeType,
+    RunMode,
+)
 from typing_trainer.ui.theme import (
     COLOR_ALERT,
     COLOR_BG_SECONDARY,
@@ -54,12 +59,8 @@ _PRESET_DESCRIPTIONS: dict[str, str] = {
         "Optional: the error-prone letter focus. You already know the keys, "
         "some just need repair."
     ),
-    "Build Speed": (
-        "Type real words, accuracy still matters, speed grows naturally."
-    ),
-    "Smooth Pairs": (
-        "Drill specific slow bigrams, words containing those pairs."
-    ),
+    "Build Speed": ("Type real words, accuracy still matters, speed grows naturally."),
+    "Smooth Pairs": ("Drill specific slow bigrams, words containing those pairs."),
 }
 
 # Preset -> (RunMode, PracticeType, default_length)
@@ -162,9 +163,7 @@ class RunConfigWidget(QWidget):
         length_group.addWidget(length_label)
 
         self._length_spin = QSpinBox()
-        self._length_spin.setRange(
-            self.config.run_length_minimum, 1000
-        )
+        self._length_spin.setRange(self.config.run_length_minimum, 1000)
         self._length_spin.setValue(120)
         self._length_spin.setSingleStep(10)
         self._length_spin.setFont(app_font(12))
@@ -200,6 +199,25 @@ class RunConfigWidget(QWidget):
         self._preset_desc.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY};")
         self._preset_desc.setWordWrap(True)
         layout.addWidget(self._preset_desc)
+
+        # --- All keys option (Build Speed / Smooth Pairs) ---
+        all_keys_layout = QHBoxLayout()
+        all_keys_layout.setSpacing(6)
+
+        self._all_letters_cb = QCheckBox("All keys")
+        self._all_letters_cb.setFont(app_font(10))
+        self._all_letters_cb.setChecked(False)
+        self._all_letters_cb.setToolTip(
+            "Use the full alphabet (a\u2013z + space). For people who "
+            "already know the key positions and want to skip Learn Keys."
+        )
+        self._all_letters_cb.stateChanged.connect(self._on_all_letters_changed)
+        all_keys_layout.addWidget(self._all_letters_cb)
+        all_keys_layout.addStretch()
+
+        self._all_letters_widgets = [self._all_letters_cb]
+
+        layout.addLayout(all_keys_layout)
 
         # --- Fix Keys controls (worst N / best M) ---
         self._fix_keys_row = QHBoxLayout()
@@ -241,8 +259,10 @@ class RunConfigWidget(QWidget):
 
         # Collect fix keys widgets for show/hide
         self._fix_keys_widgets = [
-            fix_worst_label, self._fix_worst_spin,
-            fix_best_label, self._fix_best_spin,
+            fix_worst_label,
+            self._fix_worst_spin,
+            fix_best_label,
+            self._fix_best_spin,
         ]
 
         layout.addLayout(self._fix_keys_row)
@@ -270,7 +290,8 @@ class RunConfigWidget(QWidget):
         highlight_layout.addStretch()
 
         self._highlight_widgets = [
-            self._highlight_cb, self._highlight_count_spin,
+            self._highlight_cb,
+            self._highlight_count_spin,
             self._highlight_suffix,
         ]
 
@@ -338,9 +359,7 @@ class RunConfigWidget(QWidget):
         preset = self._current_preset()
 
         # Description
-        self._preset_desc.setText(
-            _PRESET_DESCRIPTIONS.get(preset, "")
-        )
+        self._preset_desc.setText(_PRESET_DESCRIPTIONS.get(preset, ""))
 
         # Fix Keys controls
         is_fix = preset == "Fix Keys"
@@ -351,6 +370,16 @@ class RunConfigWidget(QWidget):
         is_learn = preset == "Learn Keys"
         for w in self._highlight_widgets:
             w.setVisible(is_learn)
+
+        # All keys checkbox (Build Speed / Smooth Pairs only)
+        is_speed_or_transition = preset in ("Build Speed", "Smooth Pairs")
+        for w in self._all_letters_widgets:
+            w.setVisible(is_speed_or_transition)
+
+        # Enable/disable toggle buttons based on "All keys" state
+        all_keys = is_speed_or_transition and self._all_letters_cb.isChecked()
+        for btn in self._letter_buttons.values():
+            btn.setEnabled(not all_keys)
 
         # Bigram display (Smooth Pairs only)
         self._update_bigram_display()
@@ -424,6 +453,15 @@ class RunConfigWidget(QWidget):
         self._update_preset_warning()
         self._update_highlight_max()
 
+    def select_preset(self, name: str) -> None:
+        """Programmatically select a preset by display name.
+
+        Does nothing if *name* is not found in the combo box.
+        """
+        idx = self._preset_combo.findText(name)
+        if idx >= 0:
+            self._preset_combo.setCurrentIndex(idx)
+
     def _rebuild_letter_toggles(self) -> None:
         """Rebuild the letter toggle buttons to match current active letters."""
         # Remove old buttons
@@ -437,27 +475,39 @@ class RunConfigWidget(QWidget):
 
         # Learn Keys: always include all active letters so newly
         # unlocked letters are auto-selected immediately.
-        if self._current_preset() == "Learn Keys":
+        preset = self._current_preset()
+        if preset == "Learn Keys":
             self._selected_letters = set(self._active_letters.keys())
+        # All keys: full alphabet regardless of what's unlocked.
+        elif (
+            preset in ("Build Speed", "Smooth Pairs")
+            and self._all_letters_cb.isChecked()
+        ):
+            self._selected_letters = set("abcdefghijklmnopqrstuvwxyz ")
 
         # If selection is now empty (e.g. first call), apply preset default
         if not self._selected_letters and self._active_letters:
             self._apply_default_selection()
 
         # Build buttons in sorted order
+        all_keys = (
+            preset in ("Build Speed", "Smooth Pairs")
+            and self._all_letters_cb.isChecked()
+        )
         for letter in sorted(self._active_letters.keys()):
             btn = QPushButton(letter)
             btn.setFont(app_font(12, bold=True))
             btn.setFixedSize(32, 32)
             btn.setCheckable(True)
             btn.setChecked(letter in self._selected_letters)
+            btn.setEnabled(not all_keys)
             btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            btn.clicked.connect(lambda checked, l=letter: self._on_letter_toggled(l, checked))
+            btn.clicked.connect(
+                lambda checked, l=letter: self._on_letter_toggled(l, checked)
+            )
             self._letter_buttons[letter] = btn
             # Insert before the trailing stretch
-            self._toggle_row.insertWidget(
-                self._toggle_row.count() - 1, btn
-            )
+            self._toggle_row.insertWidget(self._toggle_row.count() - 1, btn)
 
         self._update_toggle_styles()
         self._update_start_button()
@@ -471,11 +521,15 @@ class RunConfigWidget(QWidget):
         """
         preset = self._current_preset()
         if preset in ("Build Speed", "Smooth Pairs"):
-            self._selected_letters = {
-                letter
-                for letter, stats in self._active_letters.items()
-                if stats.state in _STABLE_STATES
-            }
+            if self._all_letters_cb.isChecked():
+                # Full alphabet + space — for users who already know the keys
+                self._selected_letters = set("abcdefghijklmnopqrstuvwxyz ")
+            else:
+                self._selected_letters = {
+                    letter
+                    for letter, stats in self._active_letters.items()
+                    if stats.state in _STABLE_STATES
+                }
         elif preset == "Fix Keys":
             self._apply_fix_keys_selection()
         else:
@@ -512,13 +566,33 @@ class RunConfigWidget(QWidget):
         # Best M (from the end, skip any already selected)
         if n_best > 0:
             best_candidates = [
-                letter for letter, _ in reversed(ranked)
-                if letter not in selected
+                letter for letter, _ in reversed(ranked) if letter not in selected
             ]
             for letter in best_candidates[:n_best]:
                 selected.add(letter)
 
         self._selected_letters = selected
+
+    def _on_all_letters_changed(self) -> None:
+        """Handle 'All keys' checkbox change in Build Speed / Smooth Pairs.
+
+        When checked, all 26 letters + space are used and the toggle
+        buttons are disabled (no manual selection).  When unchecked,
+        the default STABLE/MASTERED selection is restored.
+        """
+        preset = self._current_preset()
+        if preset not in ("Build Speed", "Smooth Pairs"):
+            return
+        all_keys = self._all_letters_cb.isChecked()
+        self._apply_default_selection()
+        # Sync + enable/disable buttons
+        for letter, btn in self._letter_buttons.items():
+            btn.blockSignals(True)
+            btn.setChecked(letter in self._selected_letters)
+            btn.setEnabled(not all_keys)
+            btn.blockSignals(False)
+        self._update_toggle_styles()
+        self._update_start_button()
 
     def _on_fix_keys_changed(self) -> None:
         """Handle worst/best spinbox value changes in Fix Keys preset."""
@@ -604,7 +678,28 @@ class RunConfigWidget(QWidget):
         self._start_btn.setEnabled(len(self._selected_letters) > 0)
 
     def get_selected_letters(self) -> dict[str, LetterStats]:
-        """Get the currently selected letters with their stats."""
+        """Get the currently selected letters with their stats.
+
+        When "All keys" is checked (Build Speed / Smooth Pairs), this
+        returns all 26 letters + space.  Letters that haven't been
+        formally introduced yet get a synthetic :class:`LetterStats`
+        with neutral defaults (STABLE state, zero error rate) so the
+        text generator can weight them equally alongside real letters.
+        """
+        if (
+            self._current_preset() in ("Build Speed", "Smooth Pairs")
+            and self._all_letters_cb.isChecked()
+        ):
+            result: dict[str, LetterStats] = {}
+            for letter in "abcdefghijklmnopqrstuvwxyz ":
+                if letter in self._active_letters:
+                    result[letter] = self._active_letters[letter]
+                else:
+                    result[letter] = LetterStats(
+                        letter=letter,
+                        state=LetterState.STABLE,
+                    )
+            return result
         return {
             letter: stats
             for letter, stats in self._active_letters.items()
@@ -613,9 +708,7 @@ class RunConfigWidget(QWidget):
 
     def _update_highlight_max(self) -> None:
         """Clamp the highlight spinbox max to (non-space selected letters - 1)."""
-        non_space = sum(
-            1 for l in self._selected_letters if l != " "
-        )
+        non_space = sum(1 for l in self._selected_letters if l != " ")
         new_max = max(0, non_space - 1)
         self._highlight_count_spin.setMaximum(new_max)
 
@@ -685,9 +778,7 @@ class RunConfigWidget(QWidget):
                 a_label = "SPC" if a == " " else a
                 b_label = "SPC" if b == " " else b
                 bigram_strs.append(f"{a_label}\u2192{b_label}")
-            self._bigram_label.setText(
-                f"Target bigrams: {', '.join(bigram_strs)}"
-            )
+            self._bigram_label.setText(f"Target bigrams: {', '.join(bigram_strs)}")
             self._bigram_label.setStyleSheet("color: #44aaff;")
             self._bigram_label.show()
         else:
@@ -711,9 +802,7 @@ class RunConfigWidget(QWidget):
 
     def _update_rest_display(self) -> None:
         if self._rest_remaining > 0:
-            self._rest_label.setText(
-                f"Suggested rest: {self._rest_remaining}s"
-            )
+            self._rest_label.setText(f"Suggested rest: {self._rest_remaining}s")
             self._rest_label.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY};")
         else:
             self._rest_label.setText("Rest complete")

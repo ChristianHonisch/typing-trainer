@@ -20,7 +20,7 @@ import numpy as np
 import pyqtgraph as pg
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from typing_trainer.models.error_types import classify_error
 from typing_trainer.storage.repository import Repository
@@ -56,7 +56,7 @@ _CATEGORY_COLORS = {
     "Swap": COLOR_ALERT,
     "Other": COLOR_OTHER_ERROR,
     "Motor Overflow": COLOR_ERROR,
-    "Burst Repeat": COLOR_WARNING,
+    "Burst Repeat": "#cc4444",  # dark red — distinct from Same Finger yellow
 }
 
 _SUBTYPE_TO_LABEL = {
@@ -78,6 +78,13 @@ class ErrorTimelineChart(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(5, 5, 5, 5)
 
+        self._empty_label = QLabel("No error timeline data yet.")
+        self._empty_label.setFont(app_font(11))
+        self._empty_label.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY};")
+        self._empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty_label.setVisible(False)
+        layout.addWidget(self._empty_label)
+
         self._plot = pg.PlotWidget()
         self._plot.setBackground(COLOR_BG_DARK)
         self._plot.showGrid(x=True, y=False, alpha=0.15)
@@ -92,7 +99,11 @@ class ErrorTimelineChart(QWidget):
 
         timeline = repo.get_error_timeline()
         if not timeline:
+            self._empty_label.setVisible(True)
+            self._plot.setVisible(False)
             return
+        self._empty_label.setVisible(False)
+        self._plot.setVisible(True)
 
         # ── Detect swaps ──
         # A swap is two consecutive cognitive errors within the same run
@@ -117,7 +128,14 @@ class ErrorTimelineChart(QWidget):
             cat: ([], []) for cat in _CATEGORIES
         }
 
-        for i, (run_id, expected, actual, error_type, position, target_length) in enumerate(timeline):
+        for i, (
+            run_id,
+            expected,
+            actual,
+            error_type,
+            position,
+            target_length,
+        ) in enumerate(timeline):
             if error_type == "motor_overflow":
                 label = "Motor Overflow"
             elif error_type == "burst_repeat":

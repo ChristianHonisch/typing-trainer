@@ -175,6 +175,8 @@ class LetterStats:
                         1.0 - self.sessions_in_current_state / recently_stable_sessions
                     )
                 return 0.0
+            case _:
+                return 0.0
 
     def _accuracy_gap_bonus(self, error_threshold: float = 0.05) -> float:
         """Training weight bonus based on how far below target accuracy.

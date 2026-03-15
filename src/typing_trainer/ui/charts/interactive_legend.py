@@ -16,6 +16,7 @@ from typing import Any
 import pyqtgraph as pg
 
 from PyQt6.QtCore import QEvent
+from PyQt6.QtGui import QColor
 
 
 class InteractiveLegend:
@@ -73,7 +74,9 @@ class InteractiveLegend:
             label.installSceneEventFilter(self._make_filter(name, legend))
 
     def _make_filter(
-        self, name: str, parent: pg.LegendItem,
+        self,
+        name: str,
+        parent: pg.LegendItem,
     ) -> _HoverFilter:
         return _HoverFilter(name, self, parent)
 
@@ -99,7 +102,7 @@ class InteractiveLegend:
                 new_pen = pg.mkPen(pen.color(), width=self._highlight_width)
                 curve.setPen(new_pen)
             else:
-                color = pen.color()
+                color = QColor(pen.color())  # clone to avoid mutating original
                 color.setAlpha(self._dim_alpha)
                 new_pen = pg.mkPen(color, width=self._normal_width)
                 curve.setPen(new_pen)

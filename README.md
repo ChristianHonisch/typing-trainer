@@ -8,7 +8,7 @@ A desktop typing trainer built on motor learning principles. No gamification, no
 
 If you want to learn typing on a keyboard, this program is for you.
 
-I built it when I switched to a split keyboard and had to relearn everything. I could type okay on a normal keyboard but never learned proper touch typing.
+I built it when I switched to a split keyboard and had to relearn everything. I could type okay on a normal keyboard (~40-50 WPM) but never learned proper touch typing.
 
 This program is based on motor learning theory. Learning to type means learning a motor skill. Motor skills develop in three stages:
 

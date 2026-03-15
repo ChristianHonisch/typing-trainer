@@ -120,6 +120,13 @@ class PerLetterRtChart(QWidget):
         right = QVBoxLayout()
         right.setSpacing(2)
 
+        self._empty_label = QLabel("No reaction time data yet.")
+        self._empty_label.setFont(app_font(11))
+        self._empty_label.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY};")
+        self._empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty_label.setVisible(False)
+        right.addWidget(self._empty_label)
+
         # --- Sliding average controls (above plot) ---
         controls = QHBoxLayout()
         controls.setSpacing(8)
@@ -158,15 +165,15 @@ class PerLetterRtChart(QWidget):
         plot_row.addWidget(self._break_widget)
 
         self._plot_recent = self._make_plot()
-        self._plot_recent.setLabel(
-            "bottom", "Last 40 runs", color=COLOR_TEXT_PRIMARY
-        )
+        self._plot_recent.setLabel("bottom", "Last 40 runs", color=COLOR_TEXT_PRIMARY)
         # Hide the Y-axis on the recent plot — shared with history plot
         self._plot_recent.getAxis("left").setWidth(0)
         self._plot_recent.getAxis("left").setTicks([])
         self._plot_recent.getAxis("left").setStyle(showValues=False)
         plot_row.addWidget(self._plot_recent, stretch=1)
 
+        self._controls_row = controls
+        self._plot_row = plot_row
         right.addLayout(plot_row, stretch=1)
         outer.addLayout(right, stretch=1)
 
@@ -205,12 +212,25 @@ class PerLetterRtChart(QWidget):
         error_rates = repo.get_per_letter_error_rates()
         letters = sorted(error_rates.keys())
 
+        rt_data = {l: repo.get_per_letter_rt_series(l) for l in letters}
+        has_data = any(bool(v) for v in rt_data.values())
+        if not has_data:
+            self._empty_label.setVisible(True)
+            self._plot_history.setVisible(False)
+            self._plot_recent.setVisible(False)
+            self._break_widget.setVisible(False)
+            self._checkbox_container.setVisible(False)
+            return
+        self._empty_label.setVisible(False)
+        self._plot_history.setVisible(True)
+        self._plot_recent.setVisible(True)
+        self._break_widget.setVisible(True)
+        self._checkbox_container.setVisible(True)
+
         # Assign stable colors (same order as per_letter_chart)
         for i, letter in enumerate(letters):
             if letter not in self._letter_colors:
-                self._letter_colors[letter] = _LETTER_COLORS[
-                    i % len(_LETTER_COLORS)
-                ]
+                self._letter_colors[letter] = _LETTER_COLORS[i % len(_LETTER_COLORS)]
 
         # Update checkboxes: add new, remove gone
         existing = set(self._checkboxes.keys())
@@ -233,10 +253,10 @@ class PerLetterRtChart(QWidget):
                 self._checkboxes[letter] = cb
                 self._checkbox_layout.addWidget(cb)
 
-        # Cache all series
+        # Cache all series (already fetched above)
         self._series_cache.clear()
         for letter in letters:
-            self._series_cache[letter] = repo.get_per_letter_rt_series(letter)
+            self._series_cache[letter] = rt_data.get(letter, [])
 
         self._redraw()
 
@@ -276,7 +296,9 @@ class PerLetterRtChart(QWidget):
 
         # Legend on the recent panel (always visible)
         legend = self._plot_recent.addLegend(
-            offset=(-10, 10), labelTextSize="9pt", colCount=2,
+            offset=(-10, 10),
+            labelTextSize="9pt",
+            colCount=2,
         )
         legend.setBrush(pg.mkBrush(30, 30, 30, 180))
 
@@ -317,8 +339,10 @@ class PerLetterRtChart(QWidget):
             r_mask = np.isin(full_x.astype(int), list(recent_ids))
             if r_mask.any():
                 r_curve = self._plot_recent.plot(
-                    full_x[r_mask], full_y[r_mask],
-                    pen=pen, name=display_name,
+                    full_x[r_mask],
+                    full_y[r_mask],
+                    pen=pen,
+                    name=display_name,
                 )
                 recent_curves[display_name] = r_curve
                 y_max = max(y_max, float(full_y[r_mask].max()))
@@ -326,7 +350,8 @@ class PerLetterRtChart(QWidget):
         # Interactive legend: hover highlights curves in both panels
         if recent_curves:
             self._interactive_legend = InteractiveLegend(
-                legend, recent_curves,
+                legend,
+                recent_curves,
                 extra_curves=history_curves if has_history else None,
                 normal_width=2,
             )
@@ -336,9 +361,7 @@ class PerLetterRtChart(QWidget):
             y_range = y_max * 1.1
             self._plot_recent.getViewBox().setYRange(0, y_range, padding=0)
             if has_history:
-                self._plot_history.getViewBox().setYRange(
-                    0, y_range, padding=0
-                )
+                self._plot_history.getViewBox().setYRange(0, y_range, padding=0)
 
     # ------------------------------------------------------------------
 
@@ -348,9 +371,7 @@ class PerLetterRtChart(QWidget):
     ) -> tuple[np.ndarray, np.ndarray]:
         """One trimmed-mean point per run."""
         x = np.array([run_id for run_id, _ in series], dtype=np.float64)
-        y = np.array(
-            [trimmed_mean(rts) for _, rts in series], dtype=np.float64
-        )
+        y = np.array([trimmed_mean(rts) for _, rts in series], dtype=np.float64)
         return x, y
 
     def _compute_rolling(

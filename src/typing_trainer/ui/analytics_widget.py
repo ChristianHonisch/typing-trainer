@@ -13,7 +13,7 @@ In Extreme Nerd mode both tiers are visible.
 
 from __future__ import annotations
 
-from PyQt6.QtWidgets import QSplitter, QTabWidget, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QLabel, QSplitter, QTabWidget, QVBoxLayout, QWidget
 from PyQt6.QtCore import Qt
 
 from typing_trainer.config import Config
@@ -96,16 +96,23 @@ class AnalyticsWidget(QWidget):
         self._letter_occurrence_chart = LetterOccurrenceChart()
 
         self._nerd_tabs.addTab(self._accuracy_chart, "Accuracy")
-        self._nerd_tabs.addTab(self._per_letter_chart, "Accuracy (Letter)")
+        self._nerd_tabs.addTab(self._per_letter_chart, "Per-Letter Accuracy")
         self._nerd_tabs.addTab(self._wpm_chart, "WPM")
-        self._nerd_tabs.addTab(self._per_letter_rt_chart, "Per-Letter RT")
+        self._nerd_tabs.addTab(self._per_letter_rt_chart, "Letter Speed")
         self._nerd_tabs.addTab(self._bigram_chart, "Bigrams")
         self._nerd_tabs.addTab(self._error_timeline_chart, "Error Timeline")
-        self._nerd_tabs.addTab(self._letter_occurrence_chart, "Letter %")
+        self._nerd_tabs.addTab(self._letter_occurrence_chart, "Letter Frequency")
 
         self._splitter.addWidget(self._nerd_tabs)
 
         # --- Extreme-Nerd-tier tabs (lower) ---
+        self._extreme_label = QLabel("  Deep Analysis")
+        self._extreme_label.setFont(app_font(9))
+        self._extreme_label.setStyleSheet(
+            f"color: {COLOR_TEXT_SECONDARY}; padding: 2px 0px;"
+        )
+        self._splitter.addWidget(self._extreme_label)
+
         self._extreme_tabs = QTabWidget()
         self._extreme_tabs.setFont(app_font(11))
         self._extreme_tabs.setStyleSheet(_TAB_STYLE)
@@ -117,14 +124,19 @@ class AnalyticsWidget(QWidget):
         self._run_speed_chart = RunSpeedChart()
         self._error_window_chart = ErrorWindowChart(self._config)
 
-        self._extreme_tabs.addTab(self._error_heatmap, "Errors")
+        self._extreme_tabs.addTab(self._error_heatmap, "Error Breakdown")
         self._extreme_tabs.addTab(self._confusion_matrix, "Confusion Matrix")
         self._extreme_tabs.addTab(self._swap_chart, "Swaps")
-        self._extreme_tabs.addTab(self._position_chart, "Position")
+        self._extreme_tabs.addTab(self._position_chart, "Error by Position")
         self._extreme_tabs.addTab(self._run_speed_chart, "Run Speed")
         self._extreme_tabs.addTab(self._error_window_chart, "Error Window")
 
         self._splitter.addWidget(self._extreme_tabs)
+
+        # Prevent collapsing either tier to zero
+        self._splitter.setCollapsible(0, False)
+        self._splitter.setCollapsible(1, False)
+        self._splitter.setCollapsible(2, False)
 
         layout.addWidget(self._splitter)
 
@@ -141,6 +153,7 @@ class AnalyticsWidget(QWidget):
         - BASIC: caller hides the entire AnalyticsWidget
         """
         self._nerd_tabs.setVisible(mode != DisplayMode.BASIC)
+        self._extreme_label.setVisible(mode == DisplayMode.EXTREME_NERD)
         self._extreme_tabs.setVisible(mode == DisplayMode.EXTREME_NERD)
 
     def refresh(self, repo: Repository) -> None:

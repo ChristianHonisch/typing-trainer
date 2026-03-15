@@ -18,7 +18,7 @@ from PyQt6.QtWidgets import QLabel
 # ---------------------------------------------------------------------------
 
 # Status / feedback
-COLOR_SUCCESS = "#4a9e4a"
+COLOR_SUCCESS = "#5cb85c"
 COLOR_ERROR = "#ff4444"
 COLOR_WARNING = "#cccc44"
 COLOR_ALERT = "#cc8800"
@@ -28,9 +28,9 @@ COLOR_INFO = "#44aaff"
 COLOR_ERROR_BG = "#441111"
 
 # Error type classification colors (for confusion matrix / stacked bars)
-COLOR_SPATIAL = "#44aaff"       # blue — physically adjacent keys
+COLOR_SPATIAL = "#44aaff"  # blue — physically adjacent keys
 COLOR_SAME_FINGER = "#cccc44"  # yellow — same finger, different row
-COLOR_MIRROR = "#cc66ff"       # purple — homologous mirror position
+COLOR_MIRROR = "#cc66ff"  # purple — homologous mirror position
 COLOR_OTHER_ERROR = "#888888"  # gray — unclassified / other
 
 # ---------------------------------------------------------------------------
@@ -50,7 +50,7 @@ COLOR_BG_CURSOR = "#444444"
 
 COLOR_TEXT_PRIMARY = "#cccccc"
 COLOR_TEXT_SECONDARY = "#888888"
-COLOR_TEXT_MUTED = "#666666"
+COLOR_TEXT_MUTED = "#999999"
 COLOR_TEXT_BRIGHT = "#ffffff"
 COLOR_HIGHLIGHT_WEAK = "#ffeeaa"
 
@@ -130,6 +130,4 @@ Set to False for normal use to prevent accidental text selection.
 def make_selectable(label: QLabel) -> None:
     """Make a QLabel's text selectable by mouse if the global flag is set."""
     if DEBUG_TEXT_SELECTABLE:
-        label.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse
-        )
+        label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)

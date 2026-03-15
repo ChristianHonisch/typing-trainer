@@ -124,9 +124,7 @@ class BigramChart(QWidget):
         self._error_table = self._create_table(
             ["Bigram", "Errors", "Total", "Error Rate"]
         )
-        self._error_table.itemSelectionChanged.connect(
-            self._on_error_selection_changed
-        )
+        self._error_table.itemSelectionChanged.connect(self._on_error_selection_changed)
         error_group.addWidget(self._error_table)
         tables_layout.addLayout(error_group)
 
@@ -136,12 +134,8 @@ class BigramChart(QWidget):
         time_label.setFont(app_font(12, bold=True))
         time_group.addWidget(time_label)
 
-        self._time_table = self._create_table(
-            ["Bigram", "Trimmed Mean (ms)", "Count"]
-        )
-        self._time_table.itemSelectionChanged.connect(
-            self._on_time_selection_changed
-        )
+        self._time_table = self._create_table(["Bigram", "Trimmed Mean (ms)", "Count"])
+        self._time_table.itemSelectionChanged.connect(self._on_time_selection_changed)
         time_group.addWidget(self._time_table)
         tables_layout.addLayout(time_group)
 
@@ -174,12 +168,8 @@ class BigramChart(QWidget):
         table = QTableWidget()
         table.setColumnCount(len(headers))
         table.setHorizontalHeaderLabels(headers)
-        table.setSelectionBehavior(
-            QAbstractItemView.SelectionBehavior.SelectRows
-        )
-        table.setSelectionMode(
-            QAbstractItemView.SelectionMode.MultiSelection
-        )
+        table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        table.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         table.setFont(app_font(11))
         v_header = table.verticalHeader()
@@ -209,9 +199,7 @@ class BigramChart(QWidget):
         header = table.horizontalHeader()
         if header is not None:
             header.setStretchLastSection(True)
-            header.setSectionResizeMode(
-                QHeaderView.ResizeMode.ResizeToContents
-            )
+            header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         return table
 
     def refresh(self, repo: Repository) -> None:
@@ -221,19 +209,11 @@ class BigramChart(QWidget):
         self._refresh_error_table(repo)
         self._refresh_time_table(repo)
         self._update_selection_display()
-        print(
-            f"[BigramChart] refresh done: "
-            f"{self._error_table.rowCount()} error rows, "
-            f"{self._time_table.rowCount()} time rows"
-        )
 
     def _on_refresh_clicked(self) -> None:
         """Handle manual refresh button click."""
         if self._repo is not None:
-            print("[BigramChart] manual refresh triggered")
             self.refresh(self._repo)
-        else:
-            print("[BigramChart] manual refresh: no repo available yet")
 
     def _refresh_error_table(self, repo: Repository) -> None:
         """Populate the error-prone bigrams table."""
@@ -241,40 +221,20 @@ class BigramChart(QWidget):
             min_count=_DISPLAY_MIN_COUNT,
             practice_types=_ANALYSIS_PRACTICE_TYPES,
         )
-        print(
-            f"[BigramChart] error query returned {len(self._error_data)} rows "
-            f"(min_count={_DISPLAY_MIN_COUNT}, "
-            f"practice_types={_ANALYSIS_PRACTICE_TYPES})"
-        )
 
         self._error_table.setRowCount(len(self._error_data))
-        for row, (prev_c, exp_c, errors, total, rate) in enumerate(
-            self._error_data
-        ):
+        for row, (prev_c, exp_c, errors, total, rate) in enumerate(self._error_data):
             bigram_label = _format_bigram(prev_c, exp_c)
-            self._error_table.setItem(
-                row, 0, QTableWidgetItem(bigram_label)
-            )
-            self._error_table.setItem(
-                row, 1, _right_aligned_item(str(errors))
-            )
-            self._error_table.setItem(
-                row, 2, _right_aligned_item(str(total))
-            )
-            self._error_table.setItem(
-                row, 3, _right_aligned_item(f"{rate * 100:.1f}%")
-            )
+            self._error_table.setItem(row, 0, QTableWidgetItem(bigram_label))
+            self._error_table.setItem(row, 1, _right_aligned_item(str(errors)))
+            self._error_table.setItem(row, 2, _right_aligned_item(str(total)))
+            self._error_table.setItem(row, 3, _right_aligned_item(f"{rate * 100:.1f}%"))
 
     def _refresh_time_table(self, repo: Repository) -> None:
         """Populate the slow bigrams table."""
         raw = repo.get_bigram_transition_times(
             min_count=_DISPLAY_MIN_COUNT,
             practice_types=_ANALYSIS_PRACTICE_TYPES,
-        )
-        print(
-            f"[BigramChart] time query returned {len(raw)} rows "
-            f"(min_count={_DISPLAY_MIN_COUNT}, "
-            f"practice_types={_ANALYSIS_PRACTICE_TYPES})"
         )
 
         # Compute trimmed mean for each bigram
@@ -289,15 +249,9 @@ class BigramChart(QWidget):
         self._time_table.setRowCount(len(self._time_data))
         for row, (prev_c, exp_c, tm, count) in enumerate(self._time_data):
             bigram_label = _format_bigram(prev_c, exp_c)
-            self._time_table.setItem(
-                row, 0, QTableWidgetItem(bigram_label)
-            )
-            self._time_table.setItem(
-                row, 1, _right_aligned_item(f"{tm:.0f}")
-            )
-            self._time_table.setItem(
-                row, 2, _right_aligned_item(str(count))
-            )
+            self._time_table.setItem(row, 0, QTableWidgetItem(bigram_label))
+            self._time_table.setItem(row, 1, _right_aligned_item(f"{tm:.0f}"))
+            self._time_table.setItem(row, 2, _right_aligned_item(str(count)))
 
     def _on_error_selection_changed(self) -> None:
         """Handle selection change in the error table."""
@@ -334,21 +288,15 @@ class BigramChart(QWidget):
         n = len(self._selected)
         if n == 0:
             self._selection_label.setText("No bigrams selected")
-            self._selection_label.setStyleSheet(
-                f"color: {COLOR_TEXT_SECONDARY};"
-            )
+            self._selection_label.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY};")
         else:
-            bigram_strs = [
-                _format_bigram(a, b) for a, b in sorted(self._selected)
-            ]
+            bigram_strs = [_format_bigram(a, b) for a, b in sorted(self._selected)]
             text = f"Selected: {', '.join(bigram_strs)}"
             if n > self._max_targets:
                 text += f"  (max {self._max_targets} — deselect some)"
                 self._selection_label.setStyleSheet("color: #cc8800;")
             else:
-                self._selection_label.setStyleSheet(
-                    f"color: {COLOR_TEXT_PRIMARY};"
-                )
+                self._selection_label.setStyleSheet(f"color: {COLOR_TEXT_PRIMARY};")
             self._selection_label.setText(text)
 
         self._start_btn.setEnabled(0 < n <= self._max_targets)
@@ -412,7 +360,5 @@ def _format_bigram(a: str, b: str) -> str:
 def _right_aligned_item(text: str) -> QTableWidgetItem:
     """Create a right-aligned table item."""
     item = QTableWidgetItem(text)
-    item.setTextAlignment(
-        Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-    )
+    item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
     return item

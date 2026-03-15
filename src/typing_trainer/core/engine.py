@@ -343,7 +343,8 @@ class TypingEngine:
 
         Should be called after the run is finished (completed or failed).
         """
-        self.state.end_time = datetime.now()
+        if self.state.end_time is None:
+            self.state.end_time = datetime.now()
         self.state.is_finished = True
 
         # Compute per-letter mean reaction times

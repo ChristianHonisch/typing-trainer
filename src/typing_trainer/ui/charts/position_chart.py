@@ -16,7 +16,7 @@ import pyqtgraph as pg
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
-from PyQt6.QtWidgets import QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from typing_trainer.storage.repository import Repository
 from typing_trainer.ui.theme import (
@@ -25,6 +25,7 @@ from typing_trainer.ui.theme import (
     COLOR_TEXT_PRIMARY,
     COLOR_TEXT_SECONDARY,
     COLOR_WARNING,
+    app_font,
 )
 
 _BUCKET_SIZE = 5
@@ -68,15 +69,18 @@ class PositionChart(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(5, 5, 5, 5)
 
+        self._empty_label = QLabel("No position data yet.")
+        self._empty_label.setFont(app_font(11))
+        self._empty_label.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY};")
+        self._empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty_label.setVisible(False)
+        layout.addWidget(self._empty_label)
+
         self._plot = pg.PlotWidget()
         self._plot.setBackground(COLOR_BG_DARK)
         self._plot.showGrid(x=False, y=True, alpha=0.15)
-        self._plot.setLabel(
-            "left", "Error Rate %", color=COLOR_TEXT_PRIMARY
-        )
-        self._plot.setLabel(
-            "bottom", "Position in Run", color=COLOR_TEXT_PRIMARY
-        )
+        self._plot.setLabel("left", "Error Rate %", color=COLOR_TEXT_PRIMARY)
+        self._plot.setLabel("bottom", "Position in Run", color=COLOR_TEXT_PRIMARY)
         self._plot.getAxis("left").setTextPen(COLOR_TEXT_SECONDARY)
         self._plot.getAxis("bottom").setTextPen(COLOR_TEXT_SECONDARY)
 
@@ -88,7 +92,11 @@ class PositionChart(QWidget):
 
         buckets = repo.get_error_rate_by_position(bucket_size=_BUCKET_SIZE)
         if not buckets:
+            self._empty_label.setVisible(True)
+            self._plot.setVisible(False)
             return
+        self._empty_label.setVisible(False)
+        self._plot.setVisible(True)
 
         n = len(buckets)
         # X positions: center of each bucket
@@ -109,7 +117,9 @@ class PositionChart(QWidget):
         # Compute overall average error rate for reference line
         total_errors = sum(e for _, e, _ in buckets)
         total_keystrokes = sum(t for _, _, t in buckets)
-        avg_rate = (total_errors / total_keystrokes * 100) if total_keystrokes > 0 else 0.0
+        avg_rate = (
+            (total_errors / total_keystrokes * 100) if total_keystrokes > 0 else 0.0
+        )
 
         # Bar chart
         bar = pg.BarGraphItem(

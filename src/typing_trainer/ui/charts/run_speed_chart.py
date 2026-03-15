@@ -22,6 +22,7 @@ from collections import deque
 import numpy as np
 import pyqtgraph as pg
 
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
@@ -112,6 +113,14 @@ class RunSpeedChart(QWidget):
         controls.addStretch()
         layout.addLayout(controls)
 
+        # --- Empty label ---
+        self._empty_label = QLabel("Select a run to view speed data.")
+        self._empty_label.setFont(app_font(11))
+        self._empty_label.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY};")
+        self._empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty_label.setVisible(False)
+        layout.addWidget(self._empty_label)
+
         # --- Plot ---
         self._plot = pg.PlotWidget()
         self._plot.setBackground(COLOR_BG_DARK)
@@ -178,13 +187,19 @@ class RunSpeedChart(QWidget):
         """Load keystroke data for the selected run and redraw."""
         if self._repo is None or self._run_combo.currentIndex() < 0:
             self._plot.clear()
+            self._empty_label.setVisible(True)
+            self._plot.setVisible(False)
             return
 
         run_id = self._run_combo.currentData()
         if run_id is None:
             self._plot.clear()
+            self._empty_label.setVisible(True)
+            self._plot.setVisible(False)
             return
 
+        self._empty_label.setVisible(False)
+        self._plot.setVisible(True)
         self._current_run = self._repo.get_run_with_keystrokes(run_id)
         self._redraw()
 
@@ -241,8 +256,10 @@ class RunSpeedChart(QWidget):
         # ── Exclude slowest X% (per stream) ──
         exclude_pct = self._exclude_spin.value()
         if exclude_pct > 0:
+
             def _exclude(
-                positions: list[int], rts: list[float],
+                positions: list[int],
+                rts: list[float],
             ) -> tuple[list[int], list[float]]:
                 if len(rts) < 2:
                     return positions, rts
@@ -259,7 +276,8 @@ class RunSpeedChart(QWidget):
 
         # ── Helper: rolling mean ──
         def rolling(
-            positions: list[int], rts: list[float],
+            positions: list[int],
+            rts: list[float],
         ) -> tuple[np.ndarray, np.ndarray]:
             buf: deque[float] = deque(maxlen=window)
             xs: list[int] = []
@@ -281,9 +299,7 @@ class RunSpeedChart(QWidget):
 
         # ── Green: all ──
         x_all, y_all = rolling(all_pos, all_rt)
-        self._plot.plot(
-            x_all, y_all, pen=pg.mkPen(COLOR_SUCCESS, width=2), name="All"
-        )
+        self._plot.plot(x_all, y_all, pen=pg.mkPen(COLOR_SUCCESS, width=2), name="All")
         y_max = max(y_max, float(y_all.max()))
 
         # ── Blue: settled ──
@@ -297,9 +313,7 @@ class RunSpeedChart(QWidget):
         # ── Cyan: space ──
         if len(space_rt) >= 2:
             x_sp, y_sp = rolling(space_pos, space_rt)
-            self._plot.plot(
-                x_sp, y_sp, pen=pg.mkPen("#44cccc", width=2), name="Space"
-            )
+            self._plot.plot(x_sp, y_sp, pen=pg.mkPen("#cc8844", width=2), name="Space")
             y_max = max(y_max, float(y_sp.max()))
 
         # ── Error markers ──
@@ -324,18 +338,20 @@ class RunSpeedChart(QWidget):
         # ── Historical baselines (dashed lines) ──
         if self._repo is not None and run.target_length > 0:
             raw_hist = self._repo.get_historical_position_rts(
-                min_target_length=run.target_length, n_runs=64,
+                min_target_length=run.target_length,
+                n_runs=64,
                 warmup=warmup,
             )
             if raw_hist:
                 bl_all, bl_settled, bl_space = compute_position_baselines(
-                    raw_hist, settled,
+                    raw_hist,
+                    settled,
                 )
                 dash_pen_all = pg.mkPen(COLOR_SUCCESS, width=1.5)
                 dash_pen_all.setDashPattern([8, 6])
                 dash_pen_settled = pg.mkPen("#44aaff", width=1.5)
                 dash_pen_settled.setDashPattern([8, 6])
-                dash_pen_space = pg.mkPen("#44cccc", width=1.5)
+                dash_pen_space = pg.mkPen("#cc8844", width=1.5)
                 dash_pen_space.setDashPattern([8, 6])
 
                 run_positions = set(all_pos)
@@ -346,7 +362,10 @@ class RunSpeedChart(QWidget):
                     bx = np.array([p for p, _ in bl_all_pts], dtype=np.float64)
                     by = np.array([v for _, v in bl_all_pts], dtype=np.float64)
                     self._plot.plot(
-                        bx, by, pen=dash_pen_all, name="Avg All",
+                        bx,
+                        by,
+                        pen=dash_pen_all,
+                        name="Avg All",
                     )
                     y_max = max(y_max, float(by.max()))
 
@@ -357,7 +376,10 @@ class RunSpeedChart(QWidget):
                     bx = np.array([p for p, _ in bl_set_pts], dtype=np.float64)
                     by = np.array([v for _, v in bl_set_pts], dtype=np.float64)
                     self._plot.plot(
-                        bx, by, pen=dash_pen_settled, name="Avg Settled",
+                        bx,
+                        by,
+                        pen=dash_pen_settled,
+                        name="Avg Settled",
                     )
                     y_max = max(y_max, float(by.max()))
 
@@ -368,7 +390,10 @@ class RunSpeedChart(QWidget):
                     bx = np.array([p for p, _ in bl_sp_pts], dtype=np.float64)
                     by = np.array([v for _, v in bl_sp_pts], dtype=np.float64)
                     self._plot.plot(
-                        bx, by, pen=dash_pen_space, name="Avg Space",
+                        bx,
+                        by,
+                        pen=dash_pen_space,
+                        name="Avg Space",
                     )
                     y_max = max(y_max, float(by.max()))
 

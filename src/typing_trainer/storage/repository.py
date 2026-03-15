@@ -76,7 +76,8 @@ class Repository:
             ),
         )
         self.db.conn.commit()
-        assert cursor.lastrowid is not None
+        if cursor.lastrowid is None:
+            raise RuntimeError("Failed to insert session: no lastrowid returned")
         session.session_id = cursor.lastrowid
         return cursor.lastrowid
 
@@ -155,7 +156,8 @@ class Repository:
                 run.fail_threshold_used,
             ),
         )
-        assert cursor.lastrowid is not None
+        if cursor.lastrowid is None:
+            raise RuntimeError("Failed to insert run: no lastrowid returned")
         run_id = cursor.lastrowid
         run.run_id = run_id
         run.session_id = session_id
@@ -430,7 +432,7 @@ class Repository:
                  (julianday(end_time) - julianday(start_time)) * 86400
                ), 0) AS total_s
                FROM runs
-               WHERE date(start_time, 'localtime') = date('now', 'localtime')
+               WHERE date(start_time) = date('now', 'localtime')
                  AND end_time IS NOT NULL"""
         ).fetchone()
         return int(row["total_s"])
@@ -441,10 +443,15 @@ class Repository:
         return row["c"]
 
     def get_runs_today(self) -> int:
-        """Get number of runs started today (local time)."""
+        """Get number of runs started today (local time).
+
+        Stored ``start_time`` values are naive local-time datetimes
+        (from ``datetime.now()``), so we compare ``date(start_time)``
+        directly against ``date('now', 'localtime')``.
+        """
         row = self.db.conn.execute(
             """SELECT COUNT(*) AS c FROM runs
-               WHERE date(start_time, 'localtime') = date('now', 'localtime')"""
+               WHERE date(start_time) = date('now', 'localtime')"""
         ).fetchone()
         return row["c"]
 
@@ -453,7 +460,7 @@ class Repository:
         row = self.db.conn.execute(
             """SELECT COALESCE(SUM(total_keystrokes), 0) AS total
                FROM runs
-               WHERE date(start_time, 'localtime') = date('now', 'localtime')"""
+               WHERE date(start_time) = date('now', 'localtime')"""
         ).fetchone()
         return row["total"]
 
@@ -484,7 +491,7 @@ class Repository:
                        ) - julianday(s.start_time)) * 86400 AS span
                    FROM sessions s
                    JOIN runs r ON r.session_id = s.id
-                   WHERE date(r.start_time, 'localtime') = date('now', 'localtime')
+                    WHERE date(r.start_time) = date('now', 'localtime')
                      AND r.end_time IS NOT NULL
                    GROUP BY s.id
                )"""
@@ -521,19 +528,27 @@ class Repository:
         ).fetchone()
         return row["total"]
 
-    def get_per_letter_rolling_accuracy_relearning(
-        self, letters: list[str], window: int = 200
-    ) -> dict[str, tuple[float, int]]:
-        """Rolling accuracy per letter, counting only Learn Keys keystrokes.
+    def _query_recent_keystrokes(
+        self,
+        letter: str,
+        window: int,
+        *,
+        learn_keys_only: bool = False,
+    ) -> list[sqlite3.Row]:
+        """Fetch the most recent *window* cognitive keystrokes for *letter*.
 
-        Same semantics as :meth:`get_per_letter_rolling_accuracy` but
-        restricted to keystrokes from Learn Keys runs
-        (``mode='relearning'`` AND ``practice_type='random_strings'``).
-        Fix Keys runs are excluded.
+        Returns rows newest-first (``ORDER BY id DESC``).
+
+        Only scored keystrokes are included (``error_type IN
+        ('correct', 'cognitive_error')``, ``is_backspace = 0``).
+
+        Args:
+            learn_keys_only: When ``True``, restrict to keystrokes from
+                Learn Keys runs (``mode='relearning'`` AND
+                ``practice_type='random_strings'``).
         """
-        result: dict[str, tuple[float, int]] = {}
-        for letter in letters:
-            rows = self.db.conn.execute(
+        if learn_keys_only:
+            return self.db.conn.execute(
                 """SELECT k.error_type FROM keystrokes k
                    JOIN runs r ON k.run_id = r.id
                    WHERE k.expected_char = ?
@@ -545,37 +560,41 @@ class Repository:
                    LIMIT ?""",
                 (letter, window),
             ).fetchall()
-
-            total = len(rows)
-            if total == 0:
-                result[letter] = (1.0, 0)
-                continue
-
-            errors = sum(1 for r in rows if r["error_type"] == "cognitive_error")
-            accuracy = (total - errors) / total
-            result[letter] = (accuracy, total)
-
-        return result
+        return self.db.conn.execute(
+            """SELECT error_type FROM keystrokes
+               WHERE expected_char = ?
+                 AND error_type IN ('correct', 'cognitive_error')
+                 AND is_backspace = 0
+               ORDER BY id DESC
+               LIMIT ?""",
+            (letter, window),
+        ).fetchall()
 
     def get_per_letter_rolling_accuracy(
-        self, letters: list[str], window: int = 200
+        self,
+        letters: list[str],
+        window: int = 200,
+        *,
+        learn_keys_only: bool = False,
     ) -> dict[str, tuple[float, int]]:
-        """Get rolling accuracy for each letter over the last `window` keystrokes.
+        """Get rolling accuracy for each letter over the last *window* keystrokes.
 
         Only counts first-input keystrokes (not motor overflow or backspace).
-        Returns dict of letter -> (accuracy, total_keystrokes_in_window).
+        Returns ``{letter: (accuracy, total_keystrokes_in_window)}``.
+
+        Args:
+            learn_keys_only: When ``True``, restrict to keystrokes from
+                Learn Keys runs (``mode='relearning'`` AND
+                ``practice_type='random_strings'``).  Fix Keys, Build
+                Speed, and Smooth Pairs runs are excluded.
         """
         result: dict[str, tuple[float, int]] = {}
         for letter in letters:
-            rows = self.db.conn.execute(
-                """SELECT error_type FROM keystrokes
-                   WHERE expected_char = ?
-                     AND error_type IN ('correct', 'cognitive_error')
-                     AND is_backspace = 0
-                   ORDER BY id DESC
-                   LIMIT ?""",
-                (letter, window),
-            ).fetchall()
+            rows = self._query_recent_keystrokes(
+                letter,
+                window,
+                learn_keys_only=learn_keys_only,
+            )
 
             total = len(rows)
             if total == 0:
@@ -612,29 +631,11 @@ class Repository:
         """
         result: dict[str, list[bool]] = {}
         for letter in letters:
-            if learn_keys_only:
-                rows = self.db.conn.execute(
-                    """SELECT k.error_type FROM keystrokes k
-                       JOIN runs r ON k.run_id = r.id
-                       WHERE k.expected_char = ?
-                         AND k.error_type IN ('correct', 'cognitive_error')
-                         AND k.is_backspace = 0
-                         AND r.mode = 'relearning'
-                         AND r.practice_type = 'random_strings'
-                       ORDER BY k.id DESC
-                       LIMIT ?""",
-                    (letter, window),
-                ).fetchall()
-            else:
-                rows = self.db.conn.execute(
-                    """SELECT error_type FROM keystrokes
-                       WHERE expected_char = ?
-                         AND error_type IN ('correct', 'cognitive_error')
-                         AND is_backspace = 0
-                       ORDER BY id DESC
-                       LIMIT ?""",
-                    (letter, window),
-                ).fetchall()
+            rows = self._query_recent_keystrokes(
+                letter,
+                window,
+                learn_keys_only=learn_keys_only,
+            )
 
             if not rows:
                 continue
@@ -966,6 +967,10 @@ class Repository:
         if last_n is not None:
             # When filtering by last_n, we need id and run_id to detect
             # consecutive pairs within the same run.
+            # LAG() is applied over ALL keystrokes (not just errors) to
+            # ensure "consecutive" means truly adjacent in the typing
+            # stream, then we filter for pairs where both are cognitive
+            # errors.
             rows = self.db.conn.execute(
                 """WITH recent AS (
                        SELECT id, run_id, expected_char, actual_char, error_type
@@ -975,8 +980,8 @@ class Repository:
                        ORDER BY id DESC
                        LIMIT ?
                    ),
-                   cognitive AS (
-                       SELECT id, run_id, expected_char, actual_char,
+                   with_lag AS (
+                       SELECT id, run_id, expected_char, actual_char, error_type,
                               LAG(expected_char) OVER (
                                   PARTITION BY run_id ORDER BY id
                               ) AS prev_expected,
@@ -987,7 +992,6 @@ class Repository:
                                   PARTITION BY run_id ORDER BY id
                               ) AS prev_error_type
                        FROM recent
-                       WHERE error_type = 'cognitive_error'
                    )
                    SELECT
                        CASE WHEN expected_char < actual_char
@@ -995,8 +999,9 @@ class Repository:
                        CASE WHEN expected_char < actual_char
                             THEN actual_char ELSE expected_char END AS char_b,
                        COUNT(*) AS cnt
-                   FROM cognitive
-                   WHERE prev_error_type = 'cognitive_error'
+                   FROM with_lag
+                   WHERE error_type = 'cognitive_error'
+                     AND prev_error_type = 'cognitive_error'
                      AND expected_char = prev_actual
                      AND actual_char = prev_expected
                    GROUP BY char_a, char_b
@@ -1005,8 +1010,8 @@ class Repository:
             ).fetchall()
         else:
             rows = self.db.conn.execute(
-                """WITH cognitive AS (
-                       SELECT id, run_id, expected_char, actual_char,
+                """WITH with_lag AS (
+                       SELECT id, run_id, expected_char, actual_char, error_type,
                               LAG(expected_char) OVER (
                                   PARTITION BY run_id ORDER BY id
                               ) AS prev_expected,
@@ -1017,7 +1022,7 @@ class Repository:
                                   PARTITION BY run_id ORDER BY id
                               ) AS prev_error_type
                        FROM keystrokes
-                       WHERE error_type = 'cognitive_error'
+                       WHERE error_type IN ('correct', 'cognitive_error')
                          AND is_backspace = 0
                    )
                    SELECT
@@ -1026,8 +1031,9 @@ class Repository:
                        CASE WHEN expected_char < actual_char
                             THEN actual_char ELSE expected_char END AS char_b,
                        COUNT(*) AS cnt
-                   FROM cognitive
-                   WHERE prev_error_type = 'cognitive_error'
+                   FROM with_lag
+                   WHERE error_type = 'cognitive_error'
+                     AND prev_error_type = 'cognitive_error'
                      AND expected_char = prev_actual
                      AND actual_char = prev_expected
                    GROUP BY char_a, char_b

@@ -847,18 +847,27 @@ class TestConfusionPairs:
         assert len(result) == 1
         assert result[0] == ("e", "s", 1)
 
-    def test_swap_pairs_not_consecutive(self, tmp_path):
+    def test_swap_pairs_not_consecutive_with_correct_between(self, tmp_path):
+        """Two cognitive errors with a correct keystroke between them are
+        NOT truly consecutive — should NOT be detected as a swap."""
         repo = make_repo(tmp_path)
         sid = self._make_session(repo)
         rid = self._make_run(repo, sid)
-        # Not a swap: correct keystroke between them
-        self._insert_keystroke(repo, rid, 0, "e", "n")
+        self._insert_keystroke(repo, rid, 0, "e", "n")  # cognitive error
         self._insert_keystroke(repo, rid, 1, "i", "i", "correct")
-        self._insert_keystroke(repo, rid, 2, "n", "e")
+        self._insert_keystroke(repo, rid, 2, "n", "e")  # cognitive error
         result = repo.get_swap_pairs()
-        # The LAG window only considers cognitive errors, so
-        # position 0 and 2 ARE consecutive in the cognitive-error
-        # subsequence — this SHOULD detect the swap
+        assert len(result) == 0  # not consecutive in keystroke stream
+
+    def test_swap_pairs_truly_consecutive_errors(self, tmp_path):
+        """Two cognitive errors that are truly adjacent (no correct between)
+        SHOULD be detected as a swap."""
+        repo = make_repo(tmp_path)
+        sid = self._make_session(repo)
+        rid = self._make_run(repo, sid)
+        self._insert_keystroke(repo, rid, 0, "e", "n")  # cognitive error
+        self._insert_keystroke(repo, rid, 1, "n", "e")  # cognitive error
+        result = repo.get_swap_pairs()
         assert len(result) == 1
         assert result[0] == ("e", "n", 1)
 
@@ -2186,6 +2195,17 @@ class TestLastNFilter:
         result = repo.get_swap_pairs(last_n=3)
         assert len(result) == 1
 
+    def test_swap_pairs_last_n_not_consecutive(self, tmp_path):
+        """With last_n: errors separated by correct keystrokes are NOT swaps."""
+        repo = make_repo(tmp_path)
+        sid = self._make_session(repo)
+        rid = self._make_run(repo, sid)
+        self._insert_keystroke(repo, rid, 0, "e", "n", "cognitive_error")
+        self._insert_keystroke(repo, rid, 1, "x", "x", "correct")
+        self._insert_keystroke(repo, rid, 2, "n", "e", "cognitive_error")
+        result = repo.get_swap_pairs(last_n=10)
+        assert len(result) == 0  # not truly consecutive
+
 
 class TestLetterCountAtRuns:
     """Tests for get_letter_count_at_runs()."""
@@ -2503,14 +2523,22 @@ class TestRelearningOnlyMethods:
             [("a", "correct")] * 20,
         )
 
-        result = repo.get_per_letter_rolling_accuracy_relearning(["a"], window=200)
+        result = repo.get_per_letter_rolling_accuracy(
+            ["a"],
+            window=200,
+            learn_keys_only=True,
+        )
         acc, count = result["a"]
         assert count == 10  # only relearning keystrokes
         assert abs(acc - 0.8) < 0.01
 
     def test_rolling_accuracy_relearning_empty(self, tmp_path):
         repo = make_repo(tmp_path)
-        result = repo.get_per_letter_rolling_accuracy_relearning(["a"], window=200)
+        result = repo.get_per_letter_rolling_accuracy(
+            ["a"],
+            window=200,
+            learn_keys_only=True,
+        )
         acc, count = result["a"]
         assert count == 0
         assert acc == 1.0
@@ -2571,7 +2599,11 @@ class TestRelearningOnlyMethods:
             practice_type=PracticeType.FIX_KEYS,
         )
 
-        result = repo.get_per_letter_rolling_accuracy_relearning(["a"], window=200)
+        result = repo.get_per_letter_rolling_accuracy(
+            ["a"],
+            window=200,
+            learn_keys_only=True,
+        )
         acc, count = result["a"]
         assert count == 10  # only Learn Keys keystrokes
         assert abs(acc - 0.8) < 0.01

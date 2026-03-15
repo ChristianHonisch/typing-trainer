@@ -261,8 +261,12 @@ class RunSummaryWidget(QWidget):
         lines.append(f"Total keystrokes:    {result.total_keystrokes}")
         lines.append(f"Cognitive errors:    {result.cognitive_errors}")
 
-        # Sub-type breakdown of cognitive errors
-        if result.cognitive_errors > 0 and result.keystrokes:
+        # Sub-type breakdown of cognitive errors (Nerd+ mode only)
+        if (
+            result.cognitive_errors > 0
+            and result.keystrokes
+            and self._display_mode != DisplayMode.BASIC
+        ):
             cat_counts: dict[ErrorCategory, int] = {
                 "spatial": 0,
                 "same_finger": 0,

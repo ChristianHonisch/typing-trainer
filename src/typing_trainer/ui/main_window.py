@@ -81,8 +81,6 @@ class MainWindow(QMainWindow):
         # State
         self._active_letters: dict[str, LetterStats] = {}
         self._current_session: Session | None = None
-        self._last_run_result = None
-        self._last_speed_result = None
 
         # Session timeout timer
         self._inactivity_timer = QTimer(self)
@@ -456,10 +454,10 @@ class MainWindow(QMainWindow):
 
         # Advancement check — only relearning-mode keystrokes count
         total_keystrokes_relearning = self.repo.get_total_keystrokes_relearning()
-        rolling_accuracy_relearning = (
-            self.repo.get_per_letter_rolling_accuracy_relearning(
-                active_letter_list, self.config.advancement_accuracy_window
-            )
+        rolling_accuracy_relearning = self.repo.get_per_letter_rolling_accuracy(
+            active_letter_list,
+            self.config.advancement_accuracy_window,
+            learn_keys_only=True,
         )
         advancement = self.letter_mgr.check_advancement(
             self._active_letters,
@@ -509,9 +507,7 @@ class MainWindow(QMainWindow):
         self._stack.setCurrentIndex(0)
         self._config_widget.setFocus()
         # Auto-select Smooth Pairs preset
-        idx = self._config_widget._preset_combo.findText("Smooth Pairs")
-        if idx >= 0:
-            self._config_widget._preset_combo.setCurrentIndex(idx)
+        self._config_widget.select_preset("Smooth Pairs")
 
     def _on_start_run(
         self, length: int, mode: RunMode, practice_type: PracticeType
@@ -554,6 +550,7 @@ class MainWindow(QMainWindow):
 
         self._main_tabs.setCurrentIndex(0)  # Ensure Training tab is active
         self._main_tabs.setTabEnabled(1, False)  # Disable Analysis during run
+        self._display_mode_combo.setEnabled(False)  # Prevent mode change during run
         self._stack.setCurrentIndex(1)
         typing_widget.start_run()
 
@@ -564,8 +561,10 @@ class MainWindow(QMainWindow):
         (both rolling accuracy AND keystroke volume threshold).
         """
         active_letter_list = list(self._active_letters.keys())
-        rolling_accuracy = self.repo.get_per_letter_rolling_accuracy_relearning(
-            active_letter_list, self.config.advancement_accuracy_window
+        rolling_accuracy = self.repo.get_per_letter_rolling_accuracy(
+            active_letter_list,
+            self.config.advancement_accuracy_window,
+            learn_keys_only=True,
         )
         total_keystrokes = self.repo.get_total_keystrokes_relearning()
         advancement = self.letter_mgr.check_advancement(
@@ -600,8 +599,6 @@ class MainWindow(QMainWindow):
                 self._current_session.session_id, result.run_id
             )
 
-        self._last_run_result = result
-
         # Update per-letter error rates in active letters from this run
         for letter, per_letter in result.per_letter.items():
             if letter in self._active_letters:
@@ -612,7 +609,6 @@ class MainWindow(QMainWindow):
         speed_result = None
         if result.mode == RunMode.SPEED:
             speed_result = self.speed_mgr.process_speed_run(result)
-            self._last_speed_result = speed_result
             # Persist speed state
             self.repo.save_speed_state(
                 self.speed_mgr.target_wpm, self.speed_mgr.best_wpm
@@ -644,8 +640,9 @@ class MainWindow(QMainWindow):
         self._stack.setCurrentIndex(2)
         self._summary_widget.setFocus()
 
-        # Re-enable Analysis tab and refresh dashboard
+        # Re-enable controls locked during the run
         self._main_tabs.setTabEnabled(1, True)
+        self._display_mode_combo.setEnabled(True)
         self._refresh_dashboard()
 
     def _on_run_aborted(self) -> None:
@@ -655,6 +652,7 @@ class MainWindow(QMainWindow):
         session stats are not updated, and no letter state changes occur.
         """
         self._main_tabs.setTabEnabled(1, True)
+        self._display_mode_combo.setEnabled(True)
         self._stack.setCurrentIndex(0)
         self._config_widget.setFocus()
 
