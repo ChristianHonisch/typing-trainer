@@ -79,8 +79,12 @@ class TestAdvancement:
         )
         manager = LetterManager(config)
         active = {
-            "e": LetterStats(letter="e", state=LetterState.STABLE, keystrokes_at_introduction=0),
-            "n": LetterStats(letter="n", state=LetterState.STABLE, keystrokes_at_introduction=0),
+            "e": LetterStats(
+                letter="e", state=LetterState.STABLE, keystrokes_at_introduction=0
+            ),
+            "n": LetterStats(
+                letter="n", state=LetterState.STABLE, keystrokes_at_introduction=0
+            ),
         }
         rolling = {
             "e": (0.97, 200),
@@ -762,3 +766,41 @@ class TestAdvancementGuard:
         result = manager.check_advancement(active, rolling, total_keystrokes=500)
         # max_ks_at_intro = 200, total = 500 -> 300 (positive, unchanged)
         assert result.keystrokes_since_introduction == 300
+
+
+class TestInitializeAllLetters:
+    """Tests for initialize_all_letters() — skip-to-speed path."""
+
+    def test_all_letters_created(self):
+        config = Config(language="de")
+        manager = LetterManager(config)
+        letters = manager.initialize_all_letters()
+
+        # All 26 letters from the German introduction order + space
+        assert " " in letters
+        for char in "abcdefghijklmnopqrstuvwxyz":
+            assert char in letters, f"Missing letter: {char}"
+
+    def test_all_letters_stable(self):
+        config = Config(language="de")
+        manager = LetterManager(config)
+        letters = manager.initialize_all_letters()
+
+        for stats in letters.values():
+            assert stats.state == LetterState.STABLE
+
+    def test_english_language(self):
+        config = Config(language="en")
+        manager = LetterManager(config)
+        letters = manager.initialize_all_letters()
+
+        assert " " in letters
+        for char in "abcdefghijklmnopqrstuvwxyz":
+            assert char in letters
+
+    def test_no_advancement_needed(self):
+        """After initializing all letters, no next letter should exist."""
+        config = Config(language="de")
+        manager = LetterManager(config)
+        letters = manager.initialize_all_letters()
+        assert manager.get_next_letter(letters) is None
