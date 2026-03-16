@@ -13,6 +13,7 @@ Analysis tab disabled during typing runs.
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 
 from PyQt6.QtCore import QTimer, Qt
 from PyQt6.QtWidgets import (
@@ -20,6 +21,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QPushButton,
     QSplitter,
     QStackedWidget,
     QTabWidget,
@@ -58,15 +60,28 @@ from typing_trainer.ui.theme import (
     app_font,
 )
 from typing_trainer.ui.analytics_widget import AnalyticsWidget
+from typing_trainer.ui.settings_widget import SettingsWidget
 from typing_trainer.ui.typing_widget import TypingWidget
+
+# Tab indices (Settings is inserted at 0, shifting the others)
+_TAB_SETTINGS = 0
+_TAB_TRAINING = 1
+_TAB_ANALYSIS = 2
 
 
 class MainWindow(QMainWindow):
     """Main application window."""
 
-    def __init__(self, config: Config) -> None:
+    def __init__(
+        self,
+        config: Config,
+        profile_name: str = "default",
+        profile_dir: "Path | None" = None,
+    ) -> None:
         super().__init__()
         self.config = config
+        self._profile_name = profile_name
+        self._profile_dir = profile_dir
 
         # Core components
         self.db = Database(config.db_path)
@@ -90,6 +105,7 @@ class MainWindow(QMainWindow):
         self._load_state()
         self._setup_ui()
         self._ensure_session()
+        self._settings_widget.refresh_profile_list(active=self._profile_name)
         self._refresh_dashboard()
 
         self._inactivity_timer.start()
@@ -128,12 +144,34 @@ class MainWindow(QMainWindow):
         outer_layout.setContentsMargins(0, 0, 0, 0)
         outer_layout.setSpacing(0)
 
-        # Display mode selector at the very top
-        display_bar = QHBoxLayout()
-        display_bar.setContentsMargins(8, 4, 8, 4)
+        # Top bar: profile info + display mode selector
+        top_bar = QHBoxLayout()
+        top_bar.setContentsMargins(8, 4, 8, 4)
+
+        # Profile name + gear button
+        self._profile_label = QLabel(f"Profile: {self._profile_name}")
+        self._profile_label.setFont(app_font(10))
+        self._profile_label.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY};")
+        top_bar.addWidget(self._profile_label)
+
+        gear_btn = QPushButton("\u2699")  # ⚙
+        gear_btn.setFont(app_font(12))
+        gear_btn.setFixedSize(24, 24)
+        gear_btn.setToolTip("Open settings")
+        gear_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        gear_btn.setStyleSheet(
+            f"QPushButton {{ border: none; color: {COLOR_TEXT_SECONDARY}; }}"
+            f"QPushButton:hover {{ color: {COLOR_TEXT_PRIMARY}; }}"
+        )
+        gear_btn.clicked.connect(lambda: self._main_tabs.setCurrentIndex(_TAB_SETTINGS))
+        top_bar.addWidget(gear_btn)
+
+        top_bar.addStretch()
+
+        # Display mode
         display_label = QLabel("Display:")
         display_label.setFont(app_font(10))
-        display_bar.addWidget(display_label)
+        top_bar.addWidget(display_label)
 
         self._display_mode_combo = QComboBox()
         self._display_mode_combo.setFont(app_font(10))
@@ -145,9 +183,8 @@ class MainWindow(QMainWindow):
         self._display_mode_combo.currentIndexChanged.connect(
             self._on_display_mode_changed
         )
-        display_bar.addWidget(self._display_mode_combo)
-        display_bar.addStretch()
-        outer_layout.addLayout(display_bar)
+        top_bar.addWidget(self._display_mode_combo)
+        outer_layout.addLayout(top_bar)
 
         # Main content area
         main_layout = QHBoxLayout()
@@ -192,9 +229,17 @@ class MainWindow(QMainWindow):
         self._summary_widget.continue_clicked.connect(self._on_continue)
         self._stack.addWidget(self._summary_widget)
 
+        # Tab 0: Settings
+        self._settings_widget = SettingsWidget(self.config, self._profile_name)
+        self._settings_widget.profile_switch_requested.connect(self._on_profile_switch)
+        self._settings_widget.new_profile_created.connect(self._on_new_profile_created)
+        self._settings_widget.profile_deleted.connect(self._on_profile_deleted)
+        self._main_tabs.addTab(self._settings_widget, "Settings")
+
+        # Tab 1: Training
         self._main_tabs.addTab(self._stack, "Training")
 
-        # Tab 1: Analysis
+        # Tab 2: Analysis
         self._analytics = AnalyticsWidget(config=self.config)
         self._main_tabs.addTab(self._analytics, "Analysis")
 
@@ -208,7 +253,8 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(self._splitter)
         outer_layout.addLayout(main_layout, stretch=1)
 
-        # Show config page
+        # Show Training tab, config page
+        self._main_tabs.setCurrentIndex(_TAB_TRAINING)
         self._stack.setCurrentIndex(0)
         self._config_widget.setFocus()
 
@@ -317,7 +363,7 @@ class MainWindow(QMainWindow):
 
     def _on_main_tab_changed(self, index: int) -> None:
         """Handle top-level tab switch. Refresh analytics when selected."""
-        if index == 1:  # Analysis tab
+        if index == _TAB_ANALYSIS:
             self._analytics.refresh(self.repo)
 
     # ------------------------------------------------------------------
@@ -343,11 +389,120 @@ class MainWindow(QMainWindow):
         self._sidebar.setVisible(mode != DisplayMode.BASIC)
 
         # Analysis tab
-        self._main_tabs.setTabVisible(1, mode != DisplayMode.BASIC)
+        self._main_tabs.setTabVisible(_TAB_ANALYSIS, mode != DisplayMode.BASIC)
+
+        # Settings: advanced section visibility
+        self._settings_widget.set_display_mode(mode)
         self._analytics.set_display_mode(mode)
 
         # Run summary sections
         self._summary_widget.set_display_mode(mode)
+
+    # ------------------------------------------------------------------
+    # Profile management
+    # ------------------------------------------------------------------
+
+    def _on_profile_switch(self, name: str) -> None:
+        """Switch to a different user profile."""
+        from typing_trainer.main import get_profile_dir, set_active_profile
+
+        # End current session
+        self._end_session()
+
+        # Save current config
+        if self._profile_dir is not None:
+            self.config.save(self._profile_dir / "config.json")
+
+        # Close current DB
+        self.db.close()
+
+        # Load new profile
+        new_dir = get_profile_dir(name)
+        new_config_path = new_dir / "config.json"
+        new_config = Config.load(new_config_path)
+        new_config.db_path = str(new_dir / "typing_trainer.db")
+
+        # Replace core state
+        self.config = new_config
+        self._profile_name = name
+        self._profile_dir = new_dir
+        self.db = Database(new_config.db_path)
+        self.db.initialize()
+        self.repo = Repository(self.db)
+        self.engine = TypingEngine(new_config)
+        self.text_gen = TextGenerator(new_config)
+        self.letter_mgr = LetterManager(new_config)
+        self.spaced_rep = SpacedRepetition(new_config)
+        self.speed_mgr = SpeedManager(new_config)
+
+        # Reload state from new DB
+        self._load_state()
+        self._ensure_session()
+
+        # Update UI
+        self._profile_label.setText(f"Profile: {name}")
+        self._settings_widget.update_config_display(new_config)
+        self._settings_widget._profile_name = name
+        self._refresh_dashboard()
+        self._main_tabs.setCurrentIndex(_TAB_SETTINGS)
+
+        set_active_profile(name)
+
+    def _on_new_profile_created(self, name: str) -> None:
+        """Handle creation of a new profile — run the wizard."""
+        from typing_trainer.main import get_profile_dir, set_active_profile
+        from typing_trainer.ui.new_user_wizard import NewUserWizard
+
+        wizard = NewUserWizard(name, self)
+        if not wizard.exec():
+            return
+
+        # Create config for the new profile
+        profile_dir = get_profile_dir(name)
+        profile_dir.mkdir(parents=True, exist_ok=True)
+        new_config = Config()
+        new_config.language = wizard.language
+        new_config.wizard_completed = True
+        new_config.db_path = str(profile_dir / "typing_trainer.db")
+        new_config.save(profile_dir / "config.json")
+
+        # Initialize DB and letters
+        new_db = Database(new_config.db_path)
+        new_db.initialize()
+        new_repo = Repository(new_db)
+        new_mgr = LetterManager(new_config)
+
+        if wizard.skip_to_speed:
+            letters = new_mgr.initialize_all_letters()
+        else:
+            letters = new_mgr.initialize_first_letters(count=2)
+
+        new_repo.save_all_letter_states(letters)
+        new_repo.save_active_letter_order(new_mgr.introduction_order)
+        new_db.close()
+
+        # Switch to the new profile
+        self._settings_widget.refresh_profile_list(active=name)
+        self._on_profile_switch(name)
+
+    def _on_profile_deleted(self, name: str) -> None:
+        """Handle profile deletion with auto-switch."""
+        from typing_trainer.main import delete_profile, list_profiles
+
+        # Determine which profile to switch to
+        profiles = list_profiles()
+        remaining = [p for p in profiles if p != name]
+        if not remaining:
+            return  # Should not happen (button is disabled)
+
+        # If deleting the active profile, switch first
+        if name == self._profile_name:
+            next_profile = remaining[0]
+            self._on_profile_switch(next_profile)
+
+        # Now delete
+        delete_profile(name)
+        self._settings_widget.refresh_profile_list()
 
     def _check_session_timeout(self) -> None:
         """Check if the session has timed out due to inactivity."""
@@ -495,6 +650,13 @@ class MainWindow(QMainWindow):
             alerts.append(f"Ready to introduce letter '{advancement.next_letter}'!")
         self._config_widget.set_alerts(alerts)
 
+        # Update settings profile info
+        self._settings_widget.set_profile_info(
+            runs=self.repo.get_total_runs(),
+            keystrokes=self.repo.get_total_keystrokes_all(),
+            letters=len(self._active_letters),
+        )
+
     def _on_bigrams_selected(self, bigrams: list[tuple[str, str]]) -> None:
         """Handle bigram selection from the analytics bigram chart.
 
@@ -503,7 +665,7 @@ class MainWindow(QMainWindow):
         """
         self._config_widget.set_selected_bigrams(bigrams)
         # Switch to Training tab
-        self._main_tabs.setCurrentIndex(0)
+        self._main_tabs.setCurrentIndex(_TAB_TRAINING)
         self._stack.setCurrentIndex(0)
         self._config_widget.setFocus()
         # Auto-select Smooth Pairs preset
@@ -548,9 +710,10 @@ class MainWindow(QMainWindow):
         old.deleteLater()
         self._stack.insertWidget(1, typing_widget)
 
-        self._main_tabs.setCurrentIndex(0)  # Ensure Training tab is active
-        self._main_tabs.setTabEnabled(1, False)  # Disable Analysis during run
-        self._display_mode_combo.setEnabled(False)  # Prevent mode change during run
+        self._main_tabs.setCurrentIndex(_TAB_TRAINING)
+        self._main_tabs.setTabEnabled(_TAB_ANALYSIS, False)
+        self._main_tabs.setTabEnabled(_TAB_SETTINGS, False)
+        self._display_mode_combo.setEnabled(False)
         self._stack.setCurrentIndex(1)
         typing_widget.start_run()
 
@@ -641,7 +804,8 @@ class MainWindow(QMainWindow):
         self._summary_widget.setFocus()
 
         # Re-enable controls locked during the run
-        self._main_tabs.setTabEnabled(1, True)
+        self._main_tabs.setTabEnabled(_TAB_ANALYSIS, True)
+        self._main_tabs.setTabEnabled(_TAB_SETTINGS, True)
         self._display_mode_combo.setEnabled(True)
         self._refresh_dashboard()
 
@@ -651,7 +815,8 @@ class MainWindow(QMainWindow):
         The run is discarded entirely — nothing is saved to the database,
         session stats are not updated, and no letter state changes occur.
         """
-        self._main_tabs.setTabEnabled(1, True)
+        self._main_tabs.setTabEnabled(_TAB_ANALYSIS, True)
+        self._main_tabs.setTabEnabled(_TAB_SETTINGS, True)
         self._display_mode_combo.setEnabled(True)
         self._stack.setCurrentIndex(0)
         self._config_widget.setFocus()

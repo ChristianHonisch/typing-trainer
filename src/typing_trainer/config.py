@@ -259,6 +259,10 @@ class Config:
     language: str = "de"
     """Active language for corpus and letter frequency ('en' or 'de')."""
 
+    # --- Profile ---
+    wizard_completed: bool = False
+    """Whether the new-user wizard has been completed for this profile."""
+
     def save(self, path: Path) -> None:
         """Save configuration to a JSON file."""
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -277,7 +281,7 @@ class Config:
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-        except (json.JSONDecodeError, OSError):
+        except json.JSONDecodeError, OSError:
             return cls()
         # Only use keys that are valid fields
         valid_keys = {f.name for f in cls.__dataclass_fields__.values()}

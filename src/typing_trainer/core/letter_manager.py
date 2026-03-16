@@ -100,6 +100,34 @@ class LetterManager:
             )
         return letters
 
+    def initialize_all_letters(self) -> dict[str, LetterStats]:
+        """Create active letter set with ALL letters in STABLE state.
+
+        For users who already know the key positions and want to skip
+        the Learn Keys phase.  All letters from the introduction order
+        plus space are created as STABLE.
+        """
+        now = datetime.now()
+        letters: dict[str, LetterStats] = {}
+        for letter in self.introduction_order:
+            letters[letter] = LetterStats(
+                letter=letter,
+                state=LetterState.STABLE,
+                sessions_since_introduced=0,
+                sessions_in_current_state=0,
+                last_practiced=now,
+            )
+        # Space is always included
+        if " " not in letters:
+            letters[" "] = LetterStats(
+                letter=" ",
+                state=LetterState.STABLE,
+                sessions_since_introduced=0,
+                sessions_in_current_state=0,
+                last_practiced=now,
+            )
+        return letters
+
     def check_advancement(
         self,
         active_letters: dict[str, LetterStats],
