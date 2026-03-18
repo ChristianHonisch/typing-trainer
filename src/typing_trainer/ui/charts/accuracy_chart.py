@@ -51,6 +51,7 @@ class AccuracyChart(QWidget):
         self._plot.getViewBox().setYRange(0.7, 1.02, padding=0)
 
         # Second Y-axis (right) for active letter count
+        self._right_y_range: tuple[float, float] | None = None
         self._right_vb = pg.ViewBox()
         plot_item = self._plot.plotItem
         if plot_item is None:
@@ -67,6 +68,7 @@ class AccuracyChart(QWidget):
         if vb is None:
             return
         vb.sigResized.connect(self._update_right_vb)
+        vb.sigRangeChanged.connect(self._on_main_range_changed)
 
         self._empty_label = QLabel("No runs recorded yet.")
         self._empty_label.setFont(app_font(11))
@@ -76,6 +78,11 @@ class AccuracyChart(QWidget):
         layout.addWidget(self._empty_label)
 
         layout.addWidget(self._plot)
+
+    def _on_main_range_changed(self) -> None:
+        """Re-apply the right Y-axis range when the main ViewBox resets."""
+        if self._right_y_range is not None:
+            self._right_vb.setYRange(*self._right_y_range, padding=0)
 
     def _update_right_vb(self) -> None:
         plot_item = self._plot.plotItem
@@ -136,35 +143,19 @@ class AccuracyChart(QWidget):
         )
         self._plot.addItem(threshold)
 
-        # Active letter count on right axis (step line)
+        # Active letter count on right axis (step line).
+        # stepMode="right" draws _| shapes: the horizontal segment
+        # extends through the run, then jumps at the end — matching
+        # the semantics "letter count at the END of this run."
         letter_counts = repo.get_letter_count_at_runs()
         if letter_counts:
-            # Build step data: duplicate each point to create horizontal
-            # segments, then a vertical jump
-            x_step: list[float] = []
-            y_step: list[float] = []
-            for i, (run_num, count) in enumerate(letter_counts):
-                if i == 0:
-                    x_step.append(float(run_num))
-                    y_step.append(float(count))
-                else:
-                    # Horizontal segment at previous count up to this run
-                    x_step.append(float(run_num))
-                    y_step.append(y_step[-1])
-                    # Vertical jump to new count
-                    x_step.append(float(run_num))
-                    y_step.append(float(count))
-            # Extend to the end of the x-axis
-            if len(runs) > 0:
-                last_run = len(runs)
-                if x_step[-1] < last_run:
-                    x_step.append(float(last_run))
-                    y_step.append(y_step[-1])
-
+            runs_arr_lc = np.array([r for r, _ in letter_counts], dtype=np.float64)
+            counts_arr_lc = np.array([c for _, c in letter_counts], dtype=np.float64)
             letters_curve = pg.PlotDataItem(
-                np.array(x_step, dtype=np.float64),
-                np.array(y_step, dtype=np.float64),
+                runs_arr_lc,
+                counts_arr_lc,
                 pen=pg.mkPen(_COLOR_LETTERS, width=1),
+                stepMode="right",
             )
             self._right_vb.addItem(letters_curve)
 
@@ -172,11 +163,8 @@ class AccuracyChart(QWidget):
             count_min = float(counts_arr.min())
             count_max = float(counts_arr.max())
             padding = max(1, (count_max - count_min) * 0.15)
-            self._right_vb.setYRange(
-                count_min - padding,
-                count_max + padding,
-                padding=0,
-            )
+            self._right_y_range = (count_min - padding, count_max + padding)
+            self._right_vb.setYRange(*self._right_y_range, padding=0)
 
         # Auto-range left y-axis
         self._plot.getViewBox().setYRange(

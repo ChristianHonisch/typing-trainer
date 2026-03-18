@@ -230,11 +230,17 @@ class RunSummaryWidget(QWidget):
         """
         self._display_mode = mode
         self._letter_group.setVisible(mode != DisplayMode.BASIC)
-        # Speed group visibility is also gated by data availability in
-        # _draw_speed_chart, so we just record the mode here; the chart
-        # drawing method will respect it.
         if mode != DisplayMode.EXTREME_NERD:
             self._speed_group.hide()
+        elif self._last_result is not None:
+            # Re-draw speed chart with cached data when switching
+            # back into Extreme Nerd mode
+            self._update_speed_chart(
+                self._last_result,
+                self._last_speed_result,
+                self._last_settled,
+                self._last_repo,
+            )
 
     def show_result(
         self,

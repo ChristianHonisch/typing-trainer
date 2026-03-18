@@ -23,6 +23,8 @@ from typing_trainer.ui.charts.accuracy_chart import AccuracyChart
 from typing_trainer.ui.charts.bigram_chart import BigramChart
 from typing_trainer.ui.charts.confusion_matrix_chart import ConfusionMatrixChart
 from typing_trainer.ui.charts.error_heatmap import ErrorHeatmap
+from typing_trainer.ui.charts.keystroke_accuracy_chart import KeystrokeAccuracyChart
+from typing_trainer.ui.charts.keystroke_rt_chart import KeystrokeRtChart
 from typing_trainer.ui.charts.error_timeline_chart import ErrorTimelineChart
 from typing_trainer.ui.charts.error_window_chart import ErrorWindowChart
 from typing_trainer.ui.charts.letter_occurrence_chart import LetterOccurrenceChart
@@ -123,6 +125,8 @@ class AnalyticsWidget(QWidget):
         self._position_chart = PositionChart()
         self._run_speed_chart = RunSpeedChart()
         self._error_window_chart = ErrorWindowChart(self._config)
+        self._keystroke_accuracy_chart = KeystrokeAccuracyChart()
+        self._keystroke_rt_chart = KeystrokeRtChart()
 
         self._extreme_tabs.addTab(self._error_heatmap, "Error Breakdown")
         self._extreme_tabs.addTab(self._confusion_matrix, "Confusion Matrix")
@@ -130,6 +134,10 @@ class AnalyticsWidget(QWidget):
         self._extreme_tabs.addTab(self._position_chart, "Error by Position")
         self._extreme_tabs.addTab(self._run_speed_chart, "Run Speed")
         self._extreme_tabs.addTab(self._error_window_chart, "Error Window")
+        self._extreme_tabs.addTab(
+            self._keystroke_accuracy_chart, "Accuracy by Keystroke"
+        )
+        self._extreme_tabs.addTab(self._keystroke_rt_chart, "RT by Keystroke")
 
         self._splitter.addWidget(self._extreme_tabs)
 
@@ -174,3 +182,5 @@ class AnalyticsWidget(QWidget):
         self._position_chart.refresh(repo)
         self._run_speed_chart.refresh(repo)
         self._error_window_chart.refresh(repo)
+        self._keystroke_accuracy_chart.refresh(repo)
+        self._keystroke_rt_chart.refresh(repo)

@@ -732,30 +732,74 @@ class Repository:
         if not thresholds:
             return []
 
-        # Per-run total_keystrokes, ordered chronologically
+        # Per-run keystroke totals with mode/practice_type, ordered chronologically.
+        # We need mode and practice_type to build a Learn Keys-only
+        # cumulative for threshold comparison, while keeping the run
+        # number aligned with ALL runs for the x-axis.
         run_rows = self.db.conn.execute(
-            "SELECT total_keystrokes FROM runs ORDER BY id"
+            "SELECT total_keystrokes, mode, practice_type FROM runs ORDER BY id"
         ).fetchall()
 
         if not run_rows:
             return []
 
-        # Build cumulative keystroke totals per run
-        cumulative = 0
+        # Build Learn Keys-only cumulative for threshold comparison.
+        # Only runs with mode='relearning' AND practice_type='random_strings'
+        # contribute, because keystrokes_at_introduction is recorded using
+        # the Learn Keys-only total.
+        cumulative_learn = 0
         result: list[tuple[int, int]] = []
         threshold_idx = 0
         n_thresholds = len(thresholds)
 
         for run_num_0, row in enumerate(run_rows):
-            cumulative += row["total_keystrokes"]
-            # Advance threshold pointer
+            if row["mode"] == "relearning" and row["practice_type"] == "random_strings":
+                cumulative_learn += row["total_keystrokes"]
+            # Advance threshold pointer using Learn Keys cumulative
             while (
-                threshold_idx < n_thresholds and thresholds[threshold_idx] <= cumulative
+                threshold_idx < n_thresholds
+                and thresholds[threshold_idx] <= cumulative_learn
             ):
                 threshold_idx += 1
             result.append((run_num_0 + 1, threshold_idx))
 
         return result
+
+    def get_per_letter_keystroke_errors(self, letter: str) -> list[bool]:
+        """Get the full chronological error sequence for a letter.
+
+        Returns a list of booleans (``True`` = cognitive error,
+        ``False`` = correct) covering every cognitive keystroke for the
+        letter, in chronological order.  No limit — returns all data.
+        """
+        rows = self.db.conn.execute(
+            """SELECT error_type FROM keystrokes
+               WHERE expected_char = ?
+                 AND error_type IN ('correct', 'cognitive_error')
+                 AND is_backspace = 0
+               ORDER BY id""",
+            (letter,),
+        ).fetchall()
+        return [r["error_type"] == "cognitive_error" for r in rows]
+
+    def get_per_letter_keystroke_rts(self, letter: str) -> list[int]:
+        """Get all reaction times for correct keystrokes of a letter.
+
+        Returns chronologically ordered RT values in milliseconds,
+        capped at 2000 ms.  Only correct keystrokes with a valid
+        ``reaction_time_ms`` are included.
+        """
+        rows = self.db.conn.execute(
+            """SELECT reaction_time_ms FROM keystrokes
+               WHERE expected_char = ?
+                 AND error_type = 'correct'
+                 AND is_backspace = 0
+                 AND reaction_time_ms IS NOT NULL
+                 AND reaction_time_ms <= 2000
+               ORDER BY id""",
+            (letter,),
+        ).fetchall()
+        return [r["reaction_time_ms"] for r in rows]
 
     def get_per_letter_accuracy_series(
         self, letter: str, window: int = 200
