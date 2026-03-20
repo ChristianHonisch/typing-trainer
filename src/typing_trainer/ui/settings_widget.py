@@ -70,6 +70,10 @@ class SettingsWidget(QWidget):
     # Payload is the deleted profile name.
     profile_deleted = pyqtSignal(str)
 
+    # Emitted when language or keyboard layout changes and runtime
+    # objects need to be rebuilt.
+    runtime_settings_changed = pyqtSignal()
+
     def __init__(
         self,
         config: Config,
@@ -167,6 +171,33 @@ class SettingsWidget(QWidget):
         )
         lang_row.addWidget(reset)
         gen_layout.addLayout(lang_row)
+
+        # Keyboard layout
+        kb_row = QHBoxLayout()
+        kb_row.addWidget(self._make_label("Keyboard layout"))
+        self._keyboard_combo = QComboBox()
+        self._keyboard_combo.setFont(app_font(11))
+        from typing_trainer.models.keyboard_layout import list_keyboards
+
+        for name in list_keyboards():
+            self._keyboard_combo.addItem(name.upper(), name)
+        idx = self._keyboard_combo.findData(self._config.keyboard_layout)
+        if idx >= 0:
+            self._keyboard_combo.setCurrentIndex(idx)
+        self._keyboard_combo.setFixedWidth(120)
+        self._keyboard_combo.currentIndexChanged.connect(self._on_keyboard_changed)
+        self._keyboard_combo.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self._keyboard_combo.wheelEvent = lambda event: event.ignore()  # type: ignore[assignment]
+        kb_row.addStretch()
+        kb_row.addWidget(self._keyboard_combo)
+        kb_reset = self._make_reset_btn()
+        kb_reset.clicked.connect(
+            lambda: self._keyboard_combo.setCurrentIndex(
+                self._keyboard_combo.findData(_DEFAULTS.keyboard_layout)
+            )
+        )
+        kb_row.addWidget(kb_reset)
+        gen_layout.addLayout(kb_row)
 
         # General numeric settings
         self._add_int_row(
@@ -650,6 +681,11 @@ class SettingsWidget(QWidget):
             self._lang_combo.blockSignals(True)
             self._lang_combo.setCurrentIndex(idx)
             self._lang_combo.blockSignals(False)
+        idx = self._keyboard_combo.findData(config.keyboard_layout)
+        if idx >= 0:
+            self._keyboard_combo.blockSignals(True)
+            self._keyboard_combo.setCurrentIndex(idx)
+            self._keyboard_combo.blockSignals(False)
 
     def set_display_mode(self, mode: DisplayMode) -> None:
         """Show/hide advanced section based on display mode."""
@@ -659,6 +695,13 @@ class SettingsWidget(QWidget):
         data = self._lang_combo.currentData()
         if isinstance(data, str):
             self._config.language = data
+            self.runtime_settings_changed.emit()
+
+    def _on_keyboard_changed(self, _index: int) -> None:
+        data = self._keyboard_combo.currentData()
+        if isinstance(data, str):
+            self._config.keyboard_layout = data
+            self.runtime_settings_changed.emit()
 
     def _on_profile_selected(self, name: str) -> None:
         if name and name != self._profile_name:

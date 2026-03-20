@@ -36,6 +36,7 @@ from typing_trainer.core.speed_manager import SpeedRunResult
 from typing_trainer.models.letter_state import DisplayMode
 from typing_trainer.core.stats import RT_CAP_MS, compute_position_baselines
 from typing_trainer.models.error_types import ErrorCategory, classify_error
+from typing_trainer.models.keyboard_layout import KeyboardLayout, load_keyboard
 from typing_trainer.models.letter_state import ErrorType
 from typing_trainer.models.run_result import RunResult
 from typing_trainer.storage.repository import Repository
@@ -71,9 +72,15 @@ class RunSummaryWidget(QWidget):
 
     continue_clicked = pyqtSignal()
 
-    def __init__(self, config: Config, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        config: Config,
+        keyboard_layout: KeyboardLayout | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         self.config = config
+        self.keyboard_layout = keyboard_layout or load_keyboard(config.keyboard_layout)
         self._rest_seconds = config.rest_suggestion_seconds
         self._rest_remaining = 0
         self._rest_timer = QTimer(self)
@@ -90,6 +97,16 @@ class RunSummaryWidget(QWidget):
         self._display_mode = DisplayMode.NERD
 
         self._setup_ui()
+
+    def set_runtime_dependencies(
+        self,
+        config: Config,
+        keyboard_layout: KeyboardLayout,
+    ) -> None:
+        """Update config/layout after a profile or settings change."""
+        self.config = config
+        self.keyboard_layout = keyboard_layout
+        self._rest_seconds = config.rest_suggestion_seconds
 
     def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -274,14 +291,16 @@ class RunSummaryWidget(QWidget):
             and self._display_mode != DisplayMode.BASIC
         ):
             cat_counts: dict[ErrorCategory, int] = {
-                "spatial": 0,
+                "same_column": 0,
                 "same_finger": 0,
+                "same_row": 0,
                 "mirror": 0,
                 "other": 0,
             }
             cat_pairs: dict[ErrorCategory, list[str]] = {
-                "spatial": [],
+                "same_column": [],
                 "same_finger": [],
+                "same_row": [],
                 "mirror": [],
                 "other": [],
             }
@@ -294,7 +313,11 @@ class RunSummaryWidget(QWidget):
             ]
 
             for i, ks in enumerate(cog_errors):
-                cat = classify_error(ks.expected_char, ks.actual_char)
+                cat = classify_error(
+                    ks.expected_char,
+                    ks.actual_char,
+                    self.keyboard_layout,
+                )
                 cat_counts[cat] += 1
                 pair_str = f"{ks.expected_char}\u2192{ks.actual_char}"
                 if pair_str not in cat_pairs[cat]:
@@ -317,12 +340,19 @@ class RunSummaryWidget(QWidget):
                         swap_pairs.append(sp)
 
             _CAT_LABELS: dict[ErrorCategory, str] = {
-                "spatial": "Spatial",
+                "same_column": "Same column",
                 "same_finger": "Same finger",
+                "same_row": "Same row",
                 "mirror": "Mirror",
                 "other": "Other",
             }
-            for cat in ("spatial", "same_finger", "mirror", "other"):
+            for cat in (
+                "mirror",
+                "same_column",
+                "same_finger",
+                "same_row",
+                "other",
+            ):
                 c = cat_counts[cat]  # type: ignore[index]
                 if c > 0:
                     pairs = cat_pairs[cat][:5]  # type: ignore[index]

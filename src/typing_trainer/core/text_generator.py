@@ -12,15 +12,20 @@ import random
 from pathlib import Path
 
 from typing_trainer.config import Config
-from typing_trainer.models.keyboard_layout import QWERTZ_FINGER_MAP
+from typing_trainer.models.keyboard_layout import KeyboardLayout, load_keyboard
 from typing_trainer.models.letter_state import LetterStats, PracticeType
 
 
 class TextGenerator:
     """Generates practice text based on the active letter set and weights."""
 
-    def __init__(self, config: Config) -> None:
+    def __init__(
+        self,
+        config: Config,
+        keyboard_layout: KeyboardLayout | None = None,
+    ) -> None:
         self.config = config
+        self.keyboard_layout = keyboard_layout or load_keyboard(config.keyboard_layout)
         self._word_cache: dict[str, list[str]] = {}  # language -> word list
         self._target_bigrams: list[tuple[str, str]] = []
         """Bigrams to target in BIGRAM_WORDS mode.  Set via
@@ -56,7 +61,9 @@ class TextGenerator:
                 text = self._generate_sentences(length, language)
             case PracticeType.BIGRAM_WORDS:
                 text = self._generate_bigram_words(
-                    length, active_letters, language,
+                    length,
+                    active_letters,
+                    language,
                     self._target_bigrams,
                 )
             case _:
@@ -100,7 +107,7 @@ class TextGenerator:
         left_active: set[str] = set()
         right_active: set[str] = set()
         for lt in letters:
-            finger = QWERTZ_FINGER_MAP.get(lt, -1)
+            finger = self.keyboard_layout.fingers.get(lt, -1)
             if 0 <= finger <= 3:
                 left_active.add(lt)
             elif finger >= 6:
@@ -146,15 +153,11 @@ class TextGenerator:
                     ]
                     if filtered:
                         f_letters, f_weights = zip(*filtered)
-                        char = random.choices(
-                            f_letters, weights=f_weights, k=1
-                        )[0]
+                        char = random.choices(f_letters, weights=f_weights, k=1)[0]
                     else:
                         # All letters excluded (shouldn't happen with
                         # thresholds >= 4, but safety fallback)
-                        char = random.choices(
-                            letters, weights=weights, k=1
-                        )[0]
+                        char = random.choices(letters, weights=weights, k=1)[0]
                 else:
                     char = random.choices(letters, weights=weights, k=1)[0]
                     # Fallback: block triples when constraints are off
@@ -165,19 +168,17 @@ class TextGenerator:
                         and result[-2] == char
                     ):
                         fb_filtered = [
-                            (lt, wt)
-                            for lt, wt in zip(letters, weights)
-                            if lt != char
+                            (lt, wt) for lt, wt in zip(letters, weights) if lt != char
                         ]
                         if fb_filtered:
                             fb_letters, fb_weights = zip(*fb_filtered)
-                            char = random.choices(
-                                fb_letters, weights=fb_weights, k=1
-                            )[0]
+                            char = random.choices(fb_letters, weights=fb_weights, k=1)[
+                                0
+                            ]
 
                 # Update trackers
                 last_nonspace = char
-                finger = QWERTZ_FINGER_MAP.get(char, -1)
+                finger = self.keyboard_layout.fingers.get(char, -1)
                 if 0 <= finger <= 3:
                     last_left = char
                 elif finger >= 6:
@@ -385,15 +386,11 @@ class TextGenerator:
         weight_map = dict(zip(letters, weights))
         return letters, weight_map
 
-    def _get_filtered_words(
-        self, active_set: set[str], language: str
-    ) -> list[str]:
+    def _get_filtered_words(self, active_set: set[str], language: str) -> list[str]:
         """Get words from corpus filtered to contain only active letters."""
         all_words = self._load_corpus(language)
         return [
-            w
-            for w in all_words
-            if all(c in active_set or c == " " for c in w.lower())
+            w for w in all_words if all(c in active_set or c == " " for c in w.lower())
         ]
 
     def _load_corpus(self, language: str) -> list[str]:
@@ -459,8 +456,7 @@ class TextGenerator:
         # Find words containing each target bigram
         all_words = self._load_corpus(language)
         filtered_words = [
-            w for w in all_words
-            if all(c in active_set or c == " " for c in w.lower())
+            w for w in all_words if all(c in active_set or c == " " for c in w.lower())
         ]
 
         # Identify bigram words and normal words
@@ -479,8 +475,7 @@ class TextGenerator:
         min_bigram_words = 20
         if len(bigram_words) < min_bigram_words:
             bigram_words_unfiltered = [
-                w for w in all_words
-                if self._word_contains_bigram(w, target_bigrams)
+                w for w in all_words if self._word_contains_bigram(w, target_bigrams)
             ]
             if len(bigram_words_unfiltered) > len(bigram_words):
                 bigram_words = bigram_words_unfiltered
@@ -521,9 +516,7 @@ class TextGenerator:
         return text
 
     @staticmethod
-    def _word_contains_bigram(
-        word: str, bigrams: list[tuple[str, str]]
-    ) -> bool:
+    def _word_contains_bigram(word: str, bigrams: list[tuple[str, str]]) -> bool:
         """Check if a word contains any of the target bigrams.
 
         A bigram (a, b) is present if characters a and b appear

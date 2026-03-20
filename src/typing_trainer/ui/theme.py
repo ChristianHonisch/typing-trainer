@@ -28,8 +28,9 @@ COLOR_INFO = "#44aaff"
 COLOR_ERROR_BG = "#441111"
 
 # Error type classification colors (for confusion matrix / stacked bars)
-COLOR_SPATIAL = "#44aaff"  # blue — physically adjacent keys
-COLOR_SAME_FINGER = "#cccc44"  # yellow — same finger, different row
+COLOR_SAME_COLUMN = "#44aaff"  # blue — correct column, wrong row
+COLOR_SAME_FINGER = "#ff8844"  # orange — correct finger, wrong column
+COLOR_SAME_ROW = "#cccc44"  # yellow — correct row, wrong finger
 COLOR_MIRROR = "#cc66ff"  # purple — homologous mirror position
 COLOR_OTHER_ERROR = "#888888"  # gray — unclassified / other
 

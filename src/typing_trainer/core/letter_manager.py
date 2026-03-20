@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from typing_trainer.config import Config
-from typing_trainer.models.keyboard_layout import get_introduction_order
+from typing_trainer.models.keyboard_layout import KeyboardLayout, load_keyboard
 from typing_trainer.models.letter_state import LetterState, LetterStats, RunMode
 from typing_trainer.models.session import Session
 
@@ -61,15 +61,22 @@ class LetterManager:
                                          ← degraded ←
     """
 
-    def __init__(self, config: Config) -> None:
+    def __init__(
+        self,
+        config: Config,
+        keyboard_layout: KeyboardLayout | None = None,
+    ) -> None:
         self.config = config
+        self.keyboard_layout = keyboard_layout or load_keyboard(config.keyboard_layout)
         self._introduction_order: list[str] | None = None
 
     @property
     def introduction_order(self) -> list[str]:
         """Get the letter introduction order for the current language."""
         if self._introduction_order is None:
-            self._introduction_order = get_introduction_order(self.config.language)
+            self._introduction_order = self.keyboard_layout.get_introduction_order(
+                self.config.language
+            )
         return self._introduction_order
 
     def set_introduction_order(self, order: list[str]) -> None:

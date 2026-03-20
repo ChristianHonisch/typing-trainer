@@ -1,173 +1,167 @@
-"""Keyboard layout definitions and letter introduction order.
+"""Keyboard layout loading and derived geometry helpers.
 
-v1 supports QWERTZ only.  Introduction order is curated for each
-language, balancing ergonomics (home-row first, spread across fingers,
-pinky keys deferred) with corpus frequency.
+Layouts are stored as JSON files in ``data/keyboards``. A layout file
+contains the finger map, physical rows/columns, mirror pairs, and
+language-specific letter frequencies / introduction orders.
 """
 
 from __future__ import annotations
 
-
-# Finger assignments for QWERTZ layout.
-# Maps each lowercase letter to the finger that should press it.
-# Fingers numbered 0-9: 0=left pinky, 4=left thumb, 5=right thumb,
-# 6=right index, 9=right pinky.
-QWERTZ_FINGER_MAP: dict[str, int] = {
-    # Left pinky (0)
-    "q": 0, "a": 0, "y": 0,
-    # Left ring (1)
-    "w": 1, "s": 1, "x": 1,
-    # Left middle (2)
-    "e": 2, "d": 2, "c": 2,
-    # Left index (3)
-    "r": 3, "f": 3, "v": 3, "t": 3, "g": 3, "b": 3,
-    # Right index (6)
-    "z": 6, "h": 6, "n": 6, "u": 6, "j": 6, "m": 6,
-    # Right middle (7)
-    "i": 7, "k": 7,
-    # Right ring (8)
-    "o": 8, "l": 8,
-    # Right pinky (9)
-    "p": 9,
-}
-
-# Letter frequencies in German text (approximate, from large corpora).
-# Lowercase only. Values are relative frequencies summing to ~1.0.
-GERMAN_LETTER_FREQUENCIES: dict[str, float] = {
-    "e": 0.1639, "n": 0.0978, "i": 0.0755, "s": 0.0727, "r": 0.0700,
-    "a": 0.0651, "t": 0.0615, "d": 0.0508, "h": 0.0476, "u": 0.0435,
-    "l": 0.0344, "c": 0.0306, "g": 0.0301, "m": 0.0253, "o": 0.0251,
-    "b": 0.0189, "w": 0.0189, "f": 0.0166, "k": 0.0121, "z": 0.0113,
-    "p": 0.0079, "v": 0.0067, "j": 0.0027, "x": 0.0003, "q": 0.0002,
-    "y": 0.0004,
-}
-
-# Letter frequencies in English text (approximate).
-ENGLISH_LETTER_FREQUENCIES: dict[str, float] = {
-    "e": 0.1270, "t": 0.0906, "a": 0.0817, "o": 0.0751, "i": 0.0697,
-    "n": 0.0675, "s": 0.0633, "h": 0.0609, "r": 0.0599, "d": 0.0425,
-    "l": 0.0403, "c": 0.0278, "u": 0.0276, "m": 0.0241, "w": 0.0236,
-    "f": 0.0223, "g": 0.0202, "y": 0.0197, "p": 0.0193, "b": 0.0129,
-    "v": 0.0098, "k": 0.0077, "j": 0.0015, "x": 0.0015, "q": 0.0010,
-    "z": 0.0007,
-}
+import json
+from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
 
 
-def get_letter_frequencies(language: str) -> dict[str, float]:
-    """Get letter frequency table for a language.
+@dataclass(frozen=True)
+class KeyboardLanguageData:
+    """Language-specific keyboard data."""
 
-    Args:
-        language: 'de' for German, 'en' for English.
-
-    Returns:
-        Dict mapping lowercase letters to their relative frequencies.
-    """
-    if language == "de":
-        return dict(GERMAN_LETTER_FREQUENCIES)
-    elif language == "en":
-        return dict(ENGLISH_LETTER_FREQUENCIES)
-    else:
-        raise ValueError(f"Unsupported language: {language}. Use 'de' or 'en'.")
+    frequencies: dict[str, float]
+    introduction_order: list[str]
 
 
-# Curated introduction orders for QWERTZ layout.
-#
-# Design principles:
-#   1. Start with high-frequency letters on easy keys.
-#   2. Spread across different fingers early (one new finger per letter).
-#   3. Home-row keys before reaches on the same finger.
-#   4. Pinky keys deferred (weakest finger).
-#   5. Language-specific frequency breaks ties.
-#
-# QWERTZ note: z is top-row right-index (easy), y is bottom-row left-pinky
-# (hard).  This is the opposite of QWERTY, so z comes much earlier and y
-# much later than in QWERTY-derived orders (e.g. keybr).
+@dataclass(frozen=True)
+class KeyboardLayout:
+    """Fully loaded keyboard layout with derived geometry lookups."""
 
-GERMAN_INTRODUCTION_ORDER: list[str] = [
-    # Tier 1 — core, one new finger each
-    "e",  # L-middle  (top, DE #1)
-    "n",  # R-index   (home, DE #2)
-    "i",  # R-middle  (top, DE #3)
-    "s",  # L-ring    (home, DE #4)
-    "r",  # L-index   (top, DE #5)
-    # Tier 2 — fill remaining fingers
-    "a",  # L-pinky   (home, DE #6)
-    "l",  # R-ring    (home, DE #11 but new finger)
-    "t",  # L-index   (top, DE #7)
-    "d",  # L-middle  (home, DE #8)
-    "h",  # R-index   (home, DE #9)
-    # Tier 3 — common extensions
-    "u",  # R-index   (top, DE #10)
-    "z",  # R-index   (top — easy on QWERTZ!, DE #20 but frequent in DE)
-    "o",  # R-ring    (top, DE #15)
-    "g",  # L-index   (home, DE #13)
-    "c",  # L-middle  (bottom, DE #12)
-    # Tier 4 — less common
-    "m",  # R-index   (bottom, DE #14)
-    "b",  # L-index   (bottom, DE #16)
-    "w",  # L-ring    (top, DE #17)
-    "f",  # L-index   (home, DE #18)
-    "k",  # R-middle  (home, DE #19)
-    # Tier 5 — rare
-    "p",  # R-pinky   (top, DE #21)
-    "v",  # L-index   (bottom, DE #22)
-    "j",  # R-index   (home, DE #23)
-    "x",  # L-ring    (bottom, DE #24)
-    "q",  # L-pinky   (top, DE #25)
-    "y",  # L-pinky   (bottom — hardest key on QWERTZ, DE #26)
-]
+    name: str
+    display_name: str
+    rows: list[list[str]]
+    row_offsets: list[float]
+    columns: list[set[str]]
+    fingers: dict[str, int]
+    mirror_pairs: dict[str, str | None]
+    languages: dict[str, KeyboardLanguageData]
+    row_of: dict[str, int]
+    column_of: dict[str, int]
+    adjacency: dict[str, set[str]]
 
-ENGLISH_INTRODUCTION_ORDER: list[str] = [
-    # Tier 1 — core, one new finger each
-    "e",  # L-middle  (top, EN #1)
-    "n",  # R-index   (home, EN #6 but different hand than e)
-    "i",  # R-middle  (top, EN #5)
-    "s",  # L-ring    (home, EN #7)
-    "r",  # L-index   (top, EN #9)
-    # Tier 2 — fill remaining fingers
-    "a",  # L-pinky   (home, EN #3)
-    "l",  # R-ring    (home, EN #11 but new finger)
-    "t",  # L-index   (top, EN #2)
-    "d",  # L-middle  (home, EN #10)
-    "h",  # R-index   (home, EN #8)
-    # Tier 3 — common extensions
-    "o",  # R-ring    (top, EN #4)
-    "u",  # R-index   (top, EN #13)
-    "g",  # L-index   (home, EN #17)
-    "c",  # L-middle  (bottom, EN #12)
-    "m",  # R-index   (bottom, EN #14)
-    # Tier 4 — less common
-    "w",  # L-ring    (top, EN #15)
-    "f",  # L-index   (home, EN #16)
-    "b",  # L-index   (bottom, EN #20)
-    "k",  # R-middle  (home, EN #22)
-    "p",  # R-pinky   (top, EN #19)
-    # Tier 5 — rare
-    "z",  # R-index   (top — easy on QWERTZ, EN #26)
-    "v",  # L-index   (bottom, EN #21)
-    "j",  # R-index   (home, EN #23)
-    "x",  # L-ring    (bottom, EN #24)
-    "q",  # L-pinky   (top, EN #25)
-    "y",  # L-pinky   (bottom — hardest key on QWERTZ, EN #18 but hard key)
-]
+    def get_frequencies(self, language: str) -> dict[str, float]:
+        """Get per-letter frequencies for a language."""
+        if language not in self.languages:
+            raise ValueError(
+                f"Unsupported language '{language}' for layout '{self.name}'"
+            )
+        return dict(self.languages[language].frequencies)
+
+    def get_introduction_order(self, language: str) -> list[str]:
+        """Get introduction order for a language."""
+        if language not in self.languages:
+            raise ValueError(
+                f"Unsupported language '{language}' for layout '{self.name}'"
+            )
+        return list(self.languages[language].introduction_order)
 
 
-def get_introduction_order(language: str) -> list[str]:
-    """Get the curated letter introduction order for a language.
+_KEYBOARD_DIR = (
+    Path(__file__).resolve().parent.parent.parent.parent / "data" / "keyboards"
+)
 
-    The order balances QWERTZ ergonomics (home-row first, finger spread,
-    pinky deferred) with corpus frequency.  The user can override it via
-    ``LetterManager.set_introduction_order()``.
 
-    Args:
-        language: 'de' or 'en'.
+def _build_adjacency(
+    rows: list[list[str]], row_offsets: list[float]
+) -> dict[str, set[str]]:
+    """Build adjacency map from row geometry and stagger offsets."""
+    pos: dict[str, tuple[int, float]] = {}
+    for row_idx, (row_keys, offset) in enumerate(zip(rows, row_offsets)):
+        for col_idx, key in enumerate(row_keys):
+            pos[key] = (row_idx, col_idx + offset)
 
-    Returns:
-        List of 26 lowercase letters in introduction order.
-    """
-    if language == "de":
-        return list(GERMAN_INTRODUCTION_ORDER)
-    elif language == "en":
-        return list(ENGLISH_INTRODUCTION_ORDER)
-    else:
-        raise ValueError(f"Unsupported language: {language}. Use 'de' or 'en'.")
+    adj: dict[str, set[str]] = {k: set() for k in pos}
+    keys = list(pos.keys())
+    for i, k1 in enumerate(keys):
+        r1, c1 = pos[k1]
+        for k2 in keys[i + 1 :]:
+            r2, c2 = pos[k2]
+            row_dist = abs(r1 - r2)
+            col_dist = abs(c1 - c2)
+
+            is_adjacent = False
+            if row_dist == 0 and 0 < col_dist <= 1.0:
+                is_adjacent = True
+            elif row_dist == 1 and col_dist <= 1.0:
+                is_adjacent = True
+
+            if is_adjacent:
+                adj[k1].add(k2)
+                adj[k2].add(k1)
+
+    return adj
+
+
+def list_keyboards() -> list[str]:
+    """List available keyboard layout names."""
+    if not _KEYBOARD_DIR.exists():
+        return []
+    return sorted(path.stem for path in _KEYBOARD_DIR.glob("*.json"))
+
+
+@lru_cache(maxsize=None)
+def load_keyboard(name: str = "qwertz") -> KeyboardLayout:
+    """Load a keyboard layout from ``data/keyboards/<name>.json``."""
+    path = _KEYBOARD_DIR / f"{name}.json"
+    if not path.exists():
+        raise ValueError(f"Unknown keyboard layout: {name}")
+
+    with open(path, encoding="utf-8") as f:
+        raw = json.load(f)
+
+    rows: list[list[str]] = [list(row) for row in raw["rows"]]
+    row_offsets: list[float] = [float(v) for v in raw["row_offsets"]]
+    columns = [set(col) for col in raw["columns"]]
+    fingers = {str(k): int(v) for k, v in raw["fingers"].items()}
+    mirror_pairs = {
+        str(k): (None if v is None else str(v)) for k, v in raw["mirror_pairs"].items()
+    }
+
+    languages: dict[str, KeyboardLanguageData] = {}
+    for lang, payload in raw["languages"].items():
+        languages[str(lang)] = KeyboardLanguageData(
+            frequencies={str(k): float(v) for k, v in payload["frequencies"].items()},
+            introduction_order=[str(ch) for ch in payload["introduction_order"]],
+        )
+
+    row_of: dict[str, int] = {}
+    for row_idx, row in enumerate(rows):
+        for key in row:
+            row_of[key] = row_idx
+
+    column_of: dict[str, int] = {}
+    for col_idx, col in enumerate(columns):
+        for key in col:
+            column_of[key] = col_idx
+
+    adjacency = _build_adjacency(rows, row_offsets)
+
+    return KeyboardLayout(
+        name=str(raw["name"]),
+        display_name=str(raw.get("display_name", raw["name"])),
+        rows=rows,
+        row_offsets=row_offsets,
+        columns=columns,
+        fingers=fingers,
+        mirror_pairs=mirror_pairs,
+        languages=languages,
+        row_of=row_of,
+        column_of=column_of,
+        adjacency=adjacency,
+    )
+
+
+def get_letter_frequencies(
+    language: str, layout_name: str = "qwertz"
+) -> dict[str, float]:
+    """Backward-compatible helper returning frequencies for a layout+language."""
+    return load_keyboard(layout_name).get_frequencies(language)
+
+
+def get_introduction_order(language: str, layout_name: str = "qwertz") -> list[str]:
+    """Backward-compatible helper returning introduction order."""
+    return load_keyboard(layout_name).get_introduction_order(language)
+
+
+# Backward-compatible convenience constants for the default QWERTZ layout.
+QWERTZ_LAYOUT = load_keyboard("qwertz")
+QWERTZ_FINGER_MAP = dict(QWERTZ_LAYOUT.fingers)
+QWERTZ_ADJACENCY = {k: set(v) for k, v in QWERTZ_LAYOUT.adjacency.items()}

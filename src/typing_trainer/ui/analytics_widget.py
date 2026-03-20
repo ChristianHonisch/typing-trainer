@@ -1,22 +1,17 @@
-"""Analytics container with two tiers of chart tabs.
+"""Analytics container with two rows of tab labels and a shared plot area.
 
-Nerd-tier tabs (upper):
-  - Accuracy, Accuracy (Letter), WPM, Per-Letter RT, Bigrams,
-    Error Timeline, Letter %
-
-Extreme-Nerd-tier tabs (lower):
-  - Errors, Confusion Matrix, Swaps, Position, Run Speed, Error Window
-
-In Nerd display mode only the upper tier is shown.
-In Extreme Nerd mode both tiers are visible.
+In Nerd display mode only the upper tab bar is visible.
+In Extreme Nerd mode both tab bar rows are visible.
+Only one tab is selected across both rows; the shared plot area below
+fills all remaining height.
 """
 
 from __future__ import annotations
 
-from PyQt6.QtWidgets import QLabel, QSplitter, QTabWidget, QVBoxLayout, QWidget
-from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QStackedWidget, QTabBar, QVBoxLayout, QWidget
 
 from typing_trainer.config import Config
+from typing_trainer.models.keyboard_layout import KeyboardLayout, load_keyboard
 from typing_trainer.models.letter_state import DisplayMode
 from typing_trainer.storage.repository import Repository
 from typing_trainer.ui.charts.accuracy_chart import AccuracyChart
@@ -43,7 +38,7 @@ from typing_trainer.ui.theme import (
     app_font,
 )
 
-_TAB_STYLE = f"""
+_TAB_BAR_STYLE = f"""
     QTabBar::tab {{
         background: {COLOR_BG_SECONDARY};
         color: {COLOR_TEXT_SECONDARY};
@@ -58,69 +53,131 @@ _TAB_STYLE = f"""
         background: {COLOR_BG_DARK};
         color: {COLOR_TEXT_PRIMARY};
     }}
-    QTabWidget::pane {{
+"""
+
+# Inactive bar: selected tab looks the same as unselected
+_TAB_BAR_INACTIVE_STYLE = f"""
+    QTabBar::tab {{
+        background: {COLOR_BG_SECONDARY};
+        color: {COLOR_TEXT_SECONDARY};
+        padding: 6px 16px;
         border: 1px solid {COLOR_BG_TERTIARY};
-        background: {COLOR_BG_DARK};
+        border-bottom: none;
+        border-top-left-radius: 4px;
+        border-top-right-radius: 4px;
+        margin-right: 2px;
+    }}
+    QTabBar::tab:selected {{
+        background: {COLOR_BG_SECONDARY};
+        color: {COLOR_TEXT_SECONDARY};
     }}
 """
 
+_NERD_TAB_COUNT = 7  # number of tabs in the upper (nerd) row
+
 
 class AnalyticsWidget(QWidget):
-    """Container for all analytics charts, organized in two tab tiers."""
+    """Two rows of tab labels with a single shared plot area."""
 
     def __init__(
         self,
         config: Config | None = None,
+        keyboard_layout: KeyboardLayout | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._config = config or Config()
+        self._keyboard_layout = keyboard_layout or load_keyboard(
+            self._config.keyboard_layout
+        )
+        self._active_bar = "nerd"
         self._setup_ui()
+
+    def set_runtime_dependencies(
+        self,
+        config: Config,
+        keyboard_layout: KeyboardLayout,
+    ) -> None:
+        """Update config/layout after a profile or settings change."""
+        self._config = config
+        self._keyboard_layout = keyboard_layout
+        self._error_heatmap.set_keyboard_layout(keyboard_layout)
+        self._confusion_matrix.set_keyboard_layout(keyboard_layout)
+        self._error_timeline_chart.set_keyboard_layout(keyboard_layout)
+        self._error_window_chart._config = config
 
     def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(0)
 
-        # Vertical splitter: nerd tabs on top, extreme tabs on bottom
-        self._splitter = QSplitter(Qt.Orientation.Vertical)
+        # --- Upper tab bar (nerd tier) ---
+        self._nerd_bar = QTabBar()
+        self._nerd_bar.setFont(app_font(11))
+        self._nerd_bar.setStyleSheet(_TAB_BAR_STYLE)
+        self._nerd_bar.setDrawBase(False)
 
-        # --- Nerd-tier tabs (upper) ---
-        self._nerd_tabs = QTabWidget()
-        self._nerd_tabs.setFont(app_font(11))
-        self._nerd_tabs.setStyleSheet(_TAB_STYLE)
+        for label in (
+            "Accuracy",
+            "Per-Letter Accuracy",
+            "WPM",
+            "Letter Speed",
+            "Bigrams",
+            "Error Timeline",
+            "Letter Frequency",
+        ):
+            self._nerd_bar.addTab(label)
 
+        self._nerd_bar.tabBarClicked.connect(self._on_nerd_tab_clicked)
+        layout.addWidget(self._nerd_bar)
+
+        # --- Lower tab bar (extreme nerd tier) ---
+        self._extreme_bar = QTabBar()
+        self._extreme_bar.setFont(app_font(11))
+        self._extreme_bar.setStyleSheet(_TAB_BAR_STYLE)
+        self._extreme_bar.setDrawBase(False)
+
+        for label in (
+            "Error Breakdown",
+            "Confusion Matrix",
+            "Swaps",
+            "Error by Position",
+            "Run Speed",
+            "Error Window",
+            "Accuracy by Keystroke",
+            "RT by Keystroke",
+        ):
+            self._extreme_bar.addTab(label)
+
+        self._extreme_bar.tabBarClicked.connect(self._on_extreme_tab_clicked)
+        layout.addWidget(self._extreme_bar)
+
+        # --- Shared plot area ---
+        self._stack = QStackedWidget()
+        self._stack.setStyleSheet(
+            f"border: 1px solid {COLOR_BG_TERTIARY}; background: {COLOR_BG_DARK};"
+        )
+
+        # Nerd-tier charts (indices 0–6)
         self._accuracy_chart = AccuracyChart()
         self._per_letter_chart = PerLetterChart()
         self._wpm_chart = WpmChart()
         self._per_letter_rt_chart = PerLetterRtChart()
         self._bigram_chart = BigramChart()
-        self._error_timeline_chart = ErrorTimelineChart()
+        self._error_timeline_chart = ErrorTimelineChart(self._keyboard_layout)
         self._letter_occurrence_chart = LetterOccurrenceChart()
 
-        self._nerd_tabs.addTab(self._accuracy_chart, "Accuracy")
-        self._nerd_tabs.addTab(self._per_letter_chart, "Per-Letter Accuracy")
-        self._nerd_tabs.addTab(self._wpm_chart, "WPM")
-        self._nerd_tabs.addTab(self._per_letter_rt_chart, "Letter Speed")
-        self._nerd_tabs.addTab(self._bigram_chart, "Bigrams")
-        self._nerd_tabs.addTab(self._error_timeline_chart, "Error Timeline")
-        self._nerd_tabs.addTab(self._letter_occurrence_chart, "Letter Frequency")
+        self._stack.addWidget(self._accuracy_chart)
+        self._stack.addWidget(self._per_letter_chart)
+        self._stack.addWidget(self._wpm_chart)
+        self._stack.addWidget(self._per_letter_rt_chart)
+        self._stack.addWidget(self._bigram_chart)
+        self._stack.addWidget(self._error_timeline_chart)
+        self._stack.addWidget(self._letter_occurrence_chart)
 
-        self._splitter.addWidget(self._nerd_tabs)
-
-        # --- Extreme-Nerd-tier tabs (lower) ---
-        self._extreme_label = QLabel("  Deep Analysis")
-        self._extreme_label.setFont(app_font(9))
-        self._extreme_label.setStyleSheet(
-            f"color: {COLOR_TEXT_SECONDARY}; padding: 2px 0px;"
-        )
-        self._splitter.addWidget(self._extreme_label)
-
-        self._extreme_tabs = QTabWidget()
-        self._extreme_tabs.setFont(app_font(11))
-        self._extreme_tabs.setStyleSheet(_TAB_STYLE)
-
-        self._error_heatmap = ErrorHeatmap()
-        self._confusion_matrix = ConfusionMatrixChart()
+        # Extreme-tier charts (indices 7–14)
+        self._error_heatmap = ErrorHeatmap(self._keyboard_layout)
+        self._confusion_matrix = ConfusionMatrixChart(self._keyboard_layout)
         self._swap_chart = SwapChart()
         self._position_chart = PositionChart()
         self._run_speed_chart = RunSpeedChart()
@@ -128,25 +185,42 @@ class AnalyticsWidget(QWidget):
         self._keystroke_accuracy_chart = KeystrokeAccuracyChart()
         self._keystroke_rt_chart = KeystrokeRtChart()
 
-        self._extreme_tabs.addTab(self._error_heatmap, "Error Breakdown")
-        self._extreme_tabs.addTab(self._confusion_matrix, "Confusion Matrix")
-        self._extreme_tabs.addTab(self._swap_chart, "Swaps")
-        self._extreme_tabs.addTab(self._position_chart, "Error by Position")
-        self._extreme_tabs.addTab(self._run_speed_chart, "Run Speed")
-        self._extreme_tabs.addTab(self._error_window_chart, "Error Window")
-        self._extreme_tabs.addTab(
-            self._keystroke_accuracy_chart, "Accuracy by Keystroke"
+        self._stack.addWidget(self._error_heatmap)
+        self._stack.addWidget(self._confusion_matrix)
+        self._stack.addWidget(self._swap_chart)
+        self._stack.addWidget(self._position_chart)
+        self._stack.addWidget(self._run_speed_chart)
+        self._stack.addWidget(self._error_window_chart)
+        self._stack.addWidget(self._keystroke_accuracy_chart)
+        self._stack.addWidget(self._keystroke_rt_chart)
+
+        layout.addWidget(self._stack, stretch=1)
+
+        # Start with nerd tab 0 selected
+        self._nerd_bar.setCurrentIndex(0)
+        self._stack.setCurrentIndex(0)
+        self._apply_bar_styles()
+
+    def _on_nerd_tab_clicked(self, index: int) -> None:
+        self._active_bar = "nerd"
+        self._apply_bar_styles()
+        self._stack.setCurrentIndex(index)
+
+    def _on_extreme_tab_clicked(self, index: int) -> None:
+        self._active_bar = "extreme"
+        self._apply_bar_styles()
+        self._stack.setCurrentIndex(_NERD_TAB_COUNT + index)
+
+    def _apply_bar_styles(self) -> None:
+        """Style the active bar with highlight, inactive bar without."""
+        self._nerd_bar.setStyleSheet(
+            _TAB_BAR_STYLE if self._active_bar == "nerd" else _TAB_BAR_INACTIVE_STYLE
         )
-        self._extreme_tabs.addTab(self._keystroke_rt_chart, "RT by Keystroke")
-
-        self._splitter.addWidget(self._extreme_tabs)
-
-        # Prevent collapsing either tier to zero
-        self._splitter.setCollapsible(0, False)
-        self._splitter.setCollapsible(1, False)
-        self._splitter.setCollapsible(2, False)
-
-        layout.addWidget(self._splitter)
+        self._extreme_bar.setStyleSheet(
+            _TAB_BAR_STYLE
+            if self._active_bar == "extreme"
+            else _TAB_BAR_INACTIVE_STYLE
+        )
 
     @property
     def bigram_chart(self) -> BigramChart:
@@ -156,13 +230,24 @@ class AnalyticsWidget(QWidget):
     def set_display_mode(self, mode: DisplayMode) -> None:
         """Show/hide tab tiers based on the display mode.
 
-        - NERD: upper tabs only
-        - EXTREME_NERD: both tiers
+        - NERD: upper tab bar only
+        - EXTREME_NERD: both tab bar rows
         - BASIC: caller hides the entire AnalyticsWidget
         """
-        self._nerd_tabs.setVisible(mode != DisplayMode.BASIC)
-        self._extreme_label.setVisible(mode == DisplayMode.EXTREME_NERD)
-        self._extreme_tabs.setVisible(mode == DisplayMode.EXTREME_NERD)
+        self._nerd_bar.setVisible(mode != DisplayMode.BASIC)
+        self._stack.setVisible(mode != DisplayMode.BASIC)
+
+        was_extreme = self._extreme_bar.isVisible()
+        is_extreme = mode == DisplayMode.EXTREME_NERD
+        self._extreme_bar.setVisible(is_extreme)
+
+        # If leaving extreme nerd with an extreme tab selected, switch to nerd tab 0
+        if was_extreme and not is_extreme:
+            if self._active_bar == "extreme":
+                self._active_bar = "nerd"
+                self._nerd_bar.setCurrentIndex(0)
+                self._stack.setCurrentIndex(0)
+                self._apply_bar_styles()
 
     def refresh(self, repo: Repository) -> None:
         """Refresh all charts with current data."""

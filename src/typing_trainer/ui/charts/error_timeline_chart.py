@@ -4,8 +4,9 @@ Plots all errors across training history with error type on the y-axis
 (text labels) and run number on the x-axis.  Each error is an ``x``
 marker, color-coded by category:
 
-- **Spatial** (blue): physically adjacent keys
-- **Same Finger** (yellow): same finger, different row
+- **Same Column** (blue): correct column, wrong row
+- **Same Finger** (orange): correct finger, wrong column
+- **Same Row** (yellow): correct row, wrong finger
 - **Mirror** (purple): homologous mirror position across hands
 - **Swap** (orange): transposition pair (consecutive cognitive errors
   with expected/actual swapped)
@@ -23,6 +24,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from typing_trainer.models.error_types import classify_error
+from typing_trainer.models.keyboard_layout import KeyboardLayout, load_keyboard
 from typing_trainer.storage.repository import Repository
 from typing_trainer.ui.theme import (
     COLOR_ALERT,
@@ -30,8 +32,9 @@ from typing_trainer.ui.theme import (
     COLOR_ERROR,
     COLOR_MIRROR,
     COLOR_OTHER_ERROR,
+    COLOR_SAME_COLUMN,
     COLOR_SAME_FINGER,
-    COLOR_SPATIAL,
+    COLOR_SAME_ROW,
     COLOR_TEXT_PRIMARY,
     COLOR_TEXT_SECONDARY,
     COLOR_WARNING,
@@ -45,13 +48,15 @@ _CATEGORIES = [
     "Other",
     "Swap",
     "Mirror",
+    "Same Row",
     "Same Finger",
-    "Spatial",
+    "Same Column",
 ]
 
 _CATEGORY_COLORS = {
-    "Spatial": COLOR_SPATIAL,
+    "Same Column": COLOR_SAME_COLUMN,
     "Same Finger": COLOR_SAME_FINGER,
+    "Same Row": COLOR_SAME_ROW,
     "Mirror": COLOR_MIRROR,
     "Swap": COLOR_ALERT,
     "Other": COLOR_OTHER_ERROR,
@@ -60,8 +65,9 @@ _CATEGORY_COLORS = {
 }
 
 _SUBTYPE_TO_LABEL = {
-    "spatial": "Spatial",
+    "same_column": "Same Column",
     "same_finger": "Same Finger",
+    "same_row": "Same Row",
     "mirror": "Mirror",
     "other": "Other",
 }
@@ -70,9 +76,17 @@ _SUBTYPE_TO_LABEL = {
 class ErrorTimelineChart(QWidget):
     """Error type timeline across all training runs."""
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        keyboard_layout: KeyboardLayout | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
+        self._keyboard_layout = keyboard_layout or load_keyboard("qwertz")
         self._setup_ui()
+
+    def set_keyboard_layout(self, keyboard_layout: KeyboardLayout) -> None:
+        self._keyboard_layout = keyboard_layout
 
     def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -144,7 +158,11 @@ class ErrorTimelineChart(QWidget):
                 if i in swap_indices:
                     label = "Swap"
                 else:
-                    subtype = classify_error(expected, actual)
+                    subtype = classify_error(
+                        expected,
+                        actual,
+                        self._keyboard_layout,
+                    )
                     label = _SUBTYPE_TO_LABEL.get(subtype, "Other")
             else:
                 continue

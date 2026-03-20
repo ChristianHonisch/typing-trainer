@@ -35,13 +35,15 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 
 from typing_trainer.models.error_types import ErrorCategory, classify_error
+from typing_trainer.models.keyboard_layout import KeyboardLayout, load_keyboard
 from typing_trainer.storage.repository import Repository
 from typing_trainer.ui.theme import (
     COLOR_BG_DARK,
     COLOR_MIRROR,
     COLOR_OTHER_ERROR,
     COLOR_SAME_FINGER,
-    COLOR_SPATIAL,
+    COLOR_SAME_COLUMN,
+    COLOR_SAME_ROW,
     COLOR_TEXT_PRIMARY,
     COLOR_TEXT_SECONDARY,
     app_font,
@@ -49,16 +51,18 @@ from typing_trainer.ui.theme import (
 
 # Map error categories to colors
 _CATEGORY_COLORS: dict[ErrorCategory, str] = {
-    "spatial": COLOR_SPATIAL,
-    "same_finger": COLOR_SAME_FINGER,
     "mirror": COLOR_MIRROR,
+    "same_column": COLOR_SAME_COLUMN,
+    "same_finger": COLOR_SAME_FINGER,
+    "same_row": COLOR_SAME_ROW,
     "other": COLOR_OTHER_ERROR,
 }
 
 _CATEGORY_LABELS: dict[ErrorCategory, str] = {
-    "spatial": "Spatial (adjacent)",
+    "mirror": "Mirror",
+    "same_column": "Same column",
     "same_finger": "Same finger",
-    "mirror": "Mirror (homologous)",
+    "same_row": "Same row",
     "other": "Other",
 }
 
@@ -71,10 +75,18 @@ _DEFAULT_LAST_N = 2000
 class ConfusionMatrixChart(QWidget):
     """Combined confusion pair bar chart + grid heatmap."""
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        keyboard_layout: KeyboardLayout | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
+        self._keyboard_layout = keyboard_layout or load_keyboard("qwertz")
         self._repo: Repository | None = None
         self._setup_ui()
+
+    def set_keyboard_layout(self, keyboard_layout: KeyboardLayout) -> None:
+        self._keyboard_layout = keyboard_layout
 
     def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -83,7 +95,7 @@ class ConfusionMatrixChart(QWidget):
         # Legend + filter row
         legend_layout = QHBoxLayout()
         legend_layout.setContentsMargins(0, 0, 0, 0)
-        for cat in ("spatial", "same_finger", "mirror", "other"):
+        for cat in ("mirror", "same_column", "same_finger", "same_row", "other"):
             color = _CATEGORY_COLORS[cat]  # type: ignore[index]
             label_text = _CATEGORY_LABELS[cat]  # type: ignore[index]
             swatch = QLabel()
@@ -238,7 +250,7 @@ class ConfusionMatrixChart(QWidget):
 
         brushes = []
         for expected, actual, _, _ in top:
-            cat = classify_error(expected, actual)
+            cat = classify_error(expected, actual, self._keyboard_layout)
             brushes.append(QColor(_CATEGORY_COLORS[cat]))
 
         bar = pg.BarGraphItem(

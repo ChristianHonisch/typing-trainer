@@ -35,6 +35,7 @@ from typing_trainer.core.letter_manager import LetterManager
 from typing_trainer.core.spaced_repetition import SpacedRepetition
 from typing_trainer.core.speed_manager import SpeedManager
 from typing_trainer.core.text_generator import TextGenerator
+from typing_trainer.models.keyboard_layout import KeyboardLayout, load_keyboard
 from typing_trainer.models.letter_state import (
     DisplayMode,
     LetterState,
@@ -82,14 +83,15 @@ class MainWindow(QMainWindow):
         self.config = config
         self._profile_name = profile_name
         self._profile_dir = profile_dir
+        self.keyboard_layout: KeyboardLayout = load_keyboard(config.keyboard_layout)
 
         # Core components
         self.db = Database(config.db_path)
         self.db.initialize()
         self.repo = Repository(self.db)
         self.engine = TypingEngine(config)
-        self.text_gen = TextGenerator(config)
-        self.letter_mgr = LetterManager(config)
+        self.text_gen = TextGenerator(config, self.keyboard_layout)
+        self.letter_mgr = LetterManager(config, self.keyboard_layout)
         self.spaced_rep = SpacedRepetition(config)
         self.speed_mgr = SpeedManager(config)
 
@@ -190,10 +192,10 @@ class MainWindow(QMainWindow):
         main_layout = QHBoxLayout()
         main_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Splitter: sidebar | main area
+        # Splitter: main area | sidebar
         self._splitter = QSplitter(Qt.Orientation.Horizontal)
 
-        # Left sidebar
+        # Right sidebar (added to splitter after main area below)
         self._sidebar = QWidget()
         sidebar_layout = QVBoxLayout(self._sidebar)
         sidebar_layout.setContentsMargins(5, 5, 5, 5)
@@ -203,8 +205,6 @@ class MainWindow(QMainWindow):
 
         self._letter_overview = LetterOverviewWidget()
         sidebar_layout.addWidget(self._letter_overview)
-
-        self._splitter.addWidget(self._sidebar)
 
         # Main area: top-level tab widget (Training | Analysis)
         self._main_tabs = QTabWidget()
@@ -225,7 +225,7 @@ class MainWindow(QMainWindow):
         self._stack.addWidget(self._typing_placeholder)
 
         # Page 2: Run summary
-        self._summary_widget = RunSummaryWidget(self.config)
+        self._summary_widget = RunSummaryWidget(self.config, self.keyboard_layout)
         self._summary_widget.continue_clicked.connect(self._on_continue)
         self._stack.addWidget(self._summary_widget)
 
@@ -234,22 +234,29 @@ class MainWindow(QMainWindow):
         self._settings_widget.profile_switch_requested.connect(self._on_profile_switch)
         self._settings_widget.new_profile_created.connect(self._on_new_profile_created)
         self._settings_widget.profile_deleted.connect(self._on_profile_deleted)
+        self._settings_widget.runtime_settings_changed.connect(
+            self._on_runtime_settings_changed
+        )
         self._main_tabs.addTab(self._settings_widget, "Settings")
 
         # Tab 1: Training
         self._main_tabs.addTab(self._stack, "Training")
 
         # Tab 2: Analysis
-        self._analytics = AnalyticsWidget(config=self.config)
+        self._analytics = AnalyticsWidget(
+            config=self.config,
+            keyboard_layout=self.keyboard_layout,
+        )
         self._main_tabs.addTab(self._analytics, "Analysis")
 
         # Wire bigram chart selection -> run config + auto-switch to Training
         self._analytics.bigram_chart.bigrams_selected.connect(self._on_bigrams_selected)
 
         self._splitter.addWidget(self._main_tabs)
+        self._splitter.addWidget(self._sidebar)
 
-        # Set initial sizes (sidebar ~300px, main area fills rest)
-        self._splitter.setSizes([300, 700])
+        # Set initial sizes (main area fills most, sidebar ~300px on right)
+        self._splitter.setSizes([700, 300])
         main_layout.addWidget(self._splitter)
         outer_layout.addLayout(main_layout, stretch=1)
 
@@ -334,7 +341,7 @@ class MainWindow(QMainWindow):
         self._current_session = Session(
             start_time=datetime.now(),
             language=self.config.language,
-            layout="qwertz",
+            layout=self.config.keyboard_layout,
         )
         self._current_session.touch()
         session_id = self.repo.create_session(self._current_session)
@@ -402,6 +409,20 @@ class MainWindow(QMainWindow):
     # Profile management
     # ------------------------------------------------------------------
 
+    def _apply_runtime_settings(self) -> None:
+        """Rebuild runtime objects after config/layout changes."""
+        self.keyboard_layout = load_keyboard(self.config.keyboard_layout)
+        self.text_gen = TextGenerator(self.config, self.keyboard_layout)
+        self.letter_mgr = LetterManager(self.config, self.keyboard_layout)
+        self._summary_widget.set_runtime_dependencies(self.config, self.keyboard_layout)
+        self._analytics.set_runtime_dependencies(self.config, self.keyboard_layout)
+        self._settings_widget.update_config_display(self.config)
+        self._refresh_dashboard()
+
+    def _on_runtime_settings_changed(self) -> None:
+        """Handle live changes to language / keyboard layout settings."""
+        self._apply_runtime_settings()
+
     def _on_profile_switch(self, name: str) -> None:
         """Switch to a different user profile."""
         from typing_trainer.main import get_profile_dir, set_active_profile
@@ -426,12 +447,13 @@ class MainWindow(QMainWindow):
         self.config = new_config
         self._profile_name = name
         self._profile_dir = new_dir
+        self.keyboard_layout = load_keyboard(new_config.keyboard_layout)
         self.db = Database(new_config.db_path)
         self.db.initialize()
         self.repo = Repository(self.db)
         self.engine = TypingEngine(new_config)
-        self.text_gen = TextGenerator(new_config)
-        self.letter_mgr = LetterManager(new_config)
+        self.text_gen = TextGenerator(new_config, self.keyboard_layout)
+        self.letter_mgr = LetterManager(new_config, self.keyboard_layout)
         self.spaced_rep = SpacedRepetition(new_config)
         self.speed_mgr = SpeedManager(new_config)
 
@@ -441,6 +463,8 @@ class MainWindow(QMainWindow):
 
         # Update UI
         self._profile_label.setText(f"Profile: {name}")
+        self._summary_widget.set_runtime_dependencies(new_config, self.keyboard_layout)
+        self._analytics.set_runtime_dependencies(new_config, self.keyboard_layout)
         self._settings_widget.update_config_display(new_config)
         self._settings_widget._profile_name = name
         self._refresh_dashboard()
