@@ -297,6 +297,40 @@ class RunConfigWidget(QWidget):
 
         layout.addLayout(highlight_layout)
 
+        # --- Single letter mode (Learn Keys / Fix Keys) ---
+        single_letter_layout = QHBoxLayout()
+        single_letter_layout.setSpacing(6)
+
+        self._single_letter_cb = QCheckBox("Single letter mode")
+        self._single_letter_cb.setFont(app_font(10))
+        self._single_letter_cb.setChecked(False)
+        self._single_letter_cb.setToolTip(
+            "Show only the current letter in large font. "
+            "Helps focus on individual key positions."
+        )
+        single_letter_layout.addWidget(self._single_letter_cb)
+
+        self._show_prev_result_cb = QCheckBox("Show previous result")
+        self._show_prev_result_cb.setFont(app_font(10))
+        self._show_prev_result_cb.setChecked(False)
+        self._show_prev_result_cb.setEnabled(False)
+        self._show_prev_result_cb.setToolTip(
+            "Show the result of the last keystroke above the current letter."
+        )
+        self._single_letter_cb.stateChanged.connect(
+            lambda checked: self._show_prev_result_cb.setEnabled(bool(checked))
+        )
+        single_letter_layout.addWidget(self._show_prev_result_cb)
+
+        single_letter_layout.addStretch()
+
+        self._single_letter_widgets = [
+            self._single_letter_cb,
+            self._show_prev_result_cb,
+        ]
+
+        layout.addLayout(single_letter_layout)
+
         layout.addStretch()
 
         # Rest timer label (shown after a run completes)
@@ -370,6 +404,11 @@ class RunConfigWidget(QWidget):
         is_learn = preset == "Learn Keys"
         for w in self._highlight_widgets:
             w.setVisible(is_learn)
+
+        # Single letter mode (Learn Keys / Fix Keys only)
+        is_relearning = preset in ("Learn Keys", "Fix Keys")
+        for w in self._single_letter_widgets:
+            w.setVisible(is_relearning)
 
         # All keys checkbox (Build Speed / Smooth Pairs only)
         is_speed_or_transition = preset in ("Build Speed", "Smooth Pairs")
@@ -738,6 +777,16 @@ class RunConfigWidget(QWidget):
 
     # ------------------------------------------------------------------
     # Alerts, bigrams
+    def get_single_letter_mode(self) -> bool:
+        """Whether single-letter display mode is enabled."""
+        return self._single_letter_cb.isChecked()
+
+    def get_show_prev_result(self) -> bool:
+        """Whether to show the previous keystroke result in single-letter mode."""
+        return (
+            self._single_letter_cb.isChecked() and self._show_prev_result_cb.isChecked()
+        )
+
     # ------------------------------------------------------------------
 
     def set_alerts(self, alerts: list[str]) -> None:

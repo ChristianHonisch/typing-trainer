@@ -100,6 +100,24 @@ class Config:
     maintaining contextual interference even for the neediest letter.
     """
 
+    # --- High accuracy suppression ---
+    high_accuracy_threshold: float = 0.98
+    """Rolling accuracy above which a letter's weight is suppressed."""
+
+    high_accuracy_window: int = 500
+    """Rolling window size (keystrokes) for the high-accuracy check.
+    Separate from ``advancement_accuracy_window`` to require more
+    sustained evidence before suppression kicks in."""
+
+    high_accuracy_min_keystrokes: int = 500
+    """Minimum keystrokes in ``high_accuracy_window`` before suppression
+    applies.  Prevents suppression based on insufficient data."""
+
+    high_accuracy_factor: float = 0.1
+    """Multiply weight by this factor when high-accuracy suppression is
+    active.  0.1 means the letter appears ~10% as often as it would
+    without suppression."""
+
     min_letters_no_repeat: int = 5
     """Minimum total active non-space letters to enable the global
     no-immediate-repeat constraint in random string generation.
@@ -125,11 +143,11 @@ class Config:
     """State bonus for letters in CONSOLIDATING state."""
     weight_recently_stable: float = 1.0
     """Maximum consolidation bonus for recently-stable letters.
-    Linearly decays to 0 over ``recently_stable_sessions`` sessions."""
-    recently_stable_sessions: int = 10
-    """Number of sessions in STABLE state before the consolidation bonus
-    fully decays.  A letter stable for fewer sessions gets proportionally
-    more practice to solidify the motor pattern."""
+    Linearly decays to 0 over ``recently_stable_keystrokes`` keystrokes."""
+    recently_stable_keystrokes: int = 800
+    """Per-letter keystrokes in STABLE state before the consolidation bonus
+    fully decays.  Uses ``rolling_keystroke_count`` (the same window as
+    advancement accuracy)."""
 
     weight_volume_deficit: float = 1.0
     """Bonus for letters whose rolling keystroke count has not yet filled
@@ -284,7 +302,7 @@ class Config:
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-        except (json.JSONDecodeError, OSError):
+        except json.JSONDecodeError, OSError:
             return cls()
         # Only use keys that are valid fields
         valid_keys = {f.name for f in cls.__dataclass_fields__.values()}

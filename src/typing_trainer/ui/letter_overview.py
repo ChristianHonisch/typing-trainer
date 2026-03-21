@@ -80,7 +80,7 @@ class LetterOverviewWidget(QWidget):
         # Table
         self._table = QTableWidget()
         self._table.setFont(app_font(11))
-        self._table.setColumnCount(8)
+        self._table.setColumnCount(9)
         self._table.setHorizontalHeaderLabels(
             [
                 "Letter",
@@ -91,6 +91,7 @@ class LetterOverviewWidget(QWidget):
                 "Stability",
                 "Mastery",
                 "Runs",
+                "Share",
             ]
         )
         header = self._table.horizontalHeader()
@@ -107,6 +108,7 @@ class LetterOverviewWidget(QWidget):
         remaining_letters: list[str] | None = None,
         keystroke_counts: dict[str, int] | None = None,
         run_counts: dict[str, int] | None = None,
+        weight_shares: dict[str, float] | None = None,
     ) -> None:
         """Refresh the table with current letter states.
 
@@ -187,6 +189,12 @@ class LetterOverviewWidget(QWidget):
             runs_item = _NumericTableItem(str(runs_val), float(runs_val))
             self._table.setItem(row, 7, runs_item)
 
+            # Share (projected weight share in next run)
+            ws = weight_shares or {}
+            share_val = ws.get(letter, 0.0)
+            share_item = _NumericTableItem(f"{share_val:.1%}", share_val)
+            self._table.setItem(row, 8, share_item)
+
         # Locked (not yet introduced) letters — grey placeholder rows
         # Use sort values that push them to the bottom (high for asc, low
         # for desc depending on column — use -1.0 so they sort below real
@@ -206,7 +214,7 @@ class LetterOverviewWidget(QWidget):
             locked_item.setForeground(muted)
             self._table.setItem(row, 1, locked_item)
 
-            for col in range(2, 8):
+            for col in range(2, 9):
                 dash = _NumericTableItem("-", -1.0)
                 dash.setForeground(muted)
                 self._table.setItem(row, col, dash)

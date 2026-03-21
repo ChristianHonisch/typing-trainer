@@ -4,7 +4,13 @@ from datetime import datetime
 
 from typing_trainer.config import Config
 from typing_trainer.core.letter_manager import LetterManager
-from typing_trainer.models.letter_state import LetterState, LetterStats, RunMode
+from typing_trainer.core.text_generator import TextGenerator
+from typing_trainer.models.letter_state import (
+    LetterState,
+    LetterStats,
+    PracticeType,
+    RunMode,
+)
 from typing_trainer.models.run_result import PerLetterResult, RunResult
 from typing_trainer.models.session import Session
 
@@ -804,3 +810,139 @@ class TestInitializeAllLetters:
         manager = LetterManager(config)
         letters = manager.initialize_all_letters()
         assert manager.get_next_letter(letters) is None
+
+
+class TestKeystrokeBasedDecay:
+    """Test that STABLE state bonus decays based on keystrokes, not sessions."""
+
+    def test_full_bonus_at_zero_keystrokes(self):
+        stats = LetterStats(
+            letter="e",
+            state=LetterState.STABLE,
+            rolling_keystroke_count=0,
+        )
+        weight = stats.training_weight(recently_stable_keystrokes=800)
+        # base(1.0) + state_bonus(1.0) + acc_gap(0) + vol_deficit(1.0) = 3.0
+        assert weight == 3.0
+
+    def test_half_bonus_at_half_keystrokes(self):
+        stats = LetterStats(
+            letter="e",
+            state=LetterState.STABLE,
+            rolling_keystroke_count=400,
+            rolling_keystroke_count_wide=400,
+        )
+        # state_bonus = 1.0 * (1 - 400/800) = 0.5
+        bonus = stats._state_bonus(recently_stable_keystrokes=800)
+        assert abs(bonus - 0.5) < 0.01
+
+    def test_zero_bonus_at_threshold(self):
+        stats = LetterStats(
+            letter="e",
+            state=LetterState.STABLE,
+            rolling_keystroke_count=800,
+        )
+        bonus = stats._state_bonus(recently_stable_keystrokes=800)
+        assert bonus == 0.0
+
+    def test_zero_bonus_above_threshold(self):
+        stats = LetterStats(
+            letter="e",
+            state=LetterState.STABLE,
+            rolling_keystroke_count=1500,
+        )
+        bonus = stats._state_bonus(recently_stable_keystrokes=800)
+        assert bonus == 0.0
+
+
+class TestHighAccuracySuppression:
+    """Test weight suppression for highly accurate letters."""
+
+    def test_suppression_active(self):
+        stats = LetterStats(
+            letter="e",
+            state=LetterState.STABLE,
+            rolling_keystroke_count=1000,
+            rolling_accuracy_wide=0.99,
+            rolling_keystroke_count_wide=500,
+        )
+        weight = stats.training_weight(
+            high_accuracy_threshold=0.98,
+            high_accuracy_min_keystrokes=500,
+            high_accuracy_factor=0.1,
+        )
+        # base(1.0) + state(0.0, above 800ks) + acc(0.0) + vol(0.0)
+        # = 1.0, then * 0.1 = 0.1
+        assert abs(weight - 0.1) < 0.01
+
+    def test_no_suppression_below_threshold(self):
+        stats = LetterStats(
+            letter="e",
+            state=LetterState.STABLE,
+            rolling_keystroke_count=1000,
+            rolling_accuracy_wide=0.95,
+            rolling_keystroke_count_wide=500,
+        )
+        weight = stats.training_weight(
+            high_accuracy_threshold=0.98,
+            high_accuracy_min_keystrokes=500,
+            high_accuracy_factor=0.1,
+        )
+        # Not suppressed: accuracy 0.95 < threshold 0.98
+        assert abs(weight - 1.0) < 0.01
+
+    def test_no_suppression_insufficient_keystrokes(self):
+        stats = LetterStats(
+            letter="e",
+            state=LetterState.STABLE,
+            rolling_keystroke_count=1000,
+            rolling_accuracy_wide=0.99,
+            rolling_keystroke_count_wide=100,  # below min
+        )
+        weight = stats.training_weight(
+            high_accuracy_threshold=0.98,
+            high_accuracy_min_keystrokes=500,
+            high_accuracy_factor=0.1,
+        )
+        # Not suppressed: only 100 keystrokes in wide window
+        assert abs(weight - 1.0) < 0.01
+
+    def test_suppression_on_mastered(self):
+        stats = LetterStats(
+            letter="e",
+            state=LetterState.MASTERED,
+            rolling_keystroke_count=1000,
+            rolling_accuracy_wide=0.99,
+            rolling_keystroke_count_wide=500,
+        )
+        weight = stats.training_weight(
+            high_accuracy_threshold=0.98,
+            high_accuracy_min_keystrokes=500,
+            high_accuracy_factor=0.1,
+        )
+        # base(0.5) + state(0) + acc(0) + vol(0) = 0.5, * 0.1 = 0.05
+        assert abs(weight - 0.05) < 0.01
+
+
+class TestMinimumLetterGuarantee:
+    """Test that every active letter appears at least once in random strings."""
+
+    def test_all_letters_present(self):
+        config = Config()
+        gen = TextGenerator(config)
+        # Create 20 letters — some will have very low weight
+        active: dict[str, LetterStats] = {}
+        for i, ch in enumerate("abcdefghijklmnopqrst"):
+            active[ch] = LetterStats(
+                letter=ch,
+                state=LetterState.MASTERED if i < 18 else LetterState.INTRODUCING,
+                rolling_keystroke_count=1000 if i < 18 else 0,
+                rolling_accuracy_wide=0.99 if i < 18 else 1.0,
+                rolling_keystroke_count_wide=500 if i < 18 else 0,
+            )
+
+        for _ in range(10):
+            text = gen.generate(PracticeType.RANDOM_STRINGS, 200, active)
+            present = set(text) - {" "}
+            for ch in "abcdefghijklmnopqrst":
+                assert ch in present, f"Letter '{ch}' missing from generated text"

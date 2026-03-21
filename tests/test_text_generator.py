@@ -112,9 +112,9 @@ class TestRandomStrings:
             text = gen.generate(PracticeType.RANDOM_STRINGS, 500, active)
             for i in range(len(text) - 2):
                 if text[i] != " ":
-                    assert not (
-                        text[i] == text[i + 1] == text[i + 2]
-                    ), f"Found 3+ consecutive '{text[i]}' at position {i}: ...{text[max(0,i-2):i+5]}..."
+                    assert not (text[i] == text[i + 1] == text[i + 2]), (
+                        f"Found 3+ consecutive '{text[i]}' at position {i}: ...{text[max(0, i - 2) : i + 5]}..."
+                    )
 
     def test_allows_double_letters(self):
         """Double letters (e.g. 'ee') should still be allowed with few letters."""
@@ -124,8 +124,7 @@ class TestRandomStrings:
 
         # With only 2 letters and 500 chars, doubles are very likely
         texts = [
-            gen.generate(PracticeType.RANDOM_STRINGS, 500, active)
-            for _ in range(10)
+            gen.generate(PracticeType.RANDOM_STRINGS, 500, active) for _ in range(10)
         ]
         all_text = "".join(texts)
         assert "ee" in all_text or "nn" in all_text
@@ -144,7 +143,7 @@ class TestRandomStrings:
             for j in range(len(non_space) - 1):
                 assert non_space[j] != non_space[j + 1], (
                     f"Global repeat '{non_space[j]}' at non-space position "
-                    f"{j} in: ...{text[max(0, j-3):j+6]}..."
+                    f"{j} in: ...{text[max(0, j - 3) : j + 6]}..."
                 )
 
     def test_global_no_repeat_disabled_below_threshold(self):
@@ -184,13 +183,11 @@ class TestRandomStrings:
             text = gen.generate(PracticeType.RANDOM_STRINGS, 500, active)
             # Extract left-hand letters only (ignoring spaces and right-hand)
             left_stream = [
-                c for c in text
-                if c != " " and 0 <= QWERTZ_FINGER_MAP.get(c, -1) <= 3
+                c for c in text if c != " " and 0 <= QWERTZ_FINGER_MAP.get(c, -1) <= 3
             ]
             for j in range(len(left_stream) - 1):
                 assert left_stream[j] != left_stream[j + 1], (
-                    f"Left-hand repeat '{left_stream[j]}' at stream "
-                    f"position {j}"
+                    f"Left-hand repeat '{left_stream[j]}' at stream position {j}"
                 )
 
     def test_per_hand_no_repeat_both_hands(self):
@@ -201,8 +198,14 @@ class TestRandomStrings:
         # Right: n(6), i(7), l(8), h(6) — but h and n share finger 6,
         #   so we need: n(6), i(7), l(8), p(9) = 4 unique fingers
         active = make_active_letters(
-            "e", "s", "r", "a",   # left: 4
-            "n", "i", "l", "p",   # right: 4
+            "e",
+            "s",
+            "r",
+            "a",  # left: 4
+            "n",
+            "i",
+            "l",
+            "p",  # right: 4
         )
 
         from typing_trainer.models.keyboard_layout import QWERTZ_FINGER_MAP
@@ -211,12 +214,10 @@ class TestRandomStrings:
             text = gen.generate(PracticeType.RANDOM_STRINGS, 500, active)
 
             left_stream = [
-                c for c in text
-                if c != " " and 0 <= QWERTZ_FINGER_MAP.get(c, -1) <= 3
+                c for c in text if c != " " and 0 <= QWERTZ_FINGER_MAP.get(c, -1) <= 3
             ]
             right_stream = [
-                c for c in text
-                if c != " " and QWERTZ_FINGER_MAP.get(c, -1) >= 6
+                c for c in text if c != " " and QWERTZ_FINGER_MAP.get(c, -1) >= 6
             ]
 
             for j in range(len(left_stream) - 1):
@@ -244,8 +245,7 @@ class TestRandomStrings:
         for _ in range(50):
             text = gen.generate(PracticeType.RANDOM_STRINGS, 500, active)
             right_stream = [
-                c for c in text
-                if c != " " and QWERTZ_FINGER_MAP.get(c, -1) >= 6
+                c for c in text if c != " " and QWERTZ_FINGER_MAP.get(c, -1) >= 6
             ]
             for j in range(len(right_stream) - 1):
                 if right_stream[j] == right_stream[j + 1]:
@@ -282,9 +282,7 @@ class TestRandomWords:
         gen = TextGenerator(config)
         active = make_active_letters("d", "e", "r", "i", "u", "n", "a", "s")
 
-        text = gen.generate(
-            PracticeType.RANDOM_WORDS, 50, active, language="de"
-        )
+        text = gen.generate(PracticeType.RANDOM_WORDS, 50, active, language="de")
         assert len(text) > 0
         words = text.split()
         for word in words:
@@ -298,9 +296,7 @@ class TestRandomWords:
         gen = TextGenerator(config)
         active = make_active_letters("a", "b")
 
-        text = gen.generate(
-            PracticeType.RANDOM_WORDS, 50, active, language="de"
-        )
+        text = gen.generate(PracticeType.RANDOM_WORDS, 50, active, language="de")
         words = text.split()
         for word in words:
             assert word == "ab"  # only word with letters a, b
@@ -313,9 +309,7 @@ class TestRandomWords:
         gen = TextGenerator(config)
         active = make_active_letters("a", "b")
 
-        text = gen.generate(
-            PracticeType.RANDOM_WORDS, 50, active, language="de"
-        )
+        text = gen.generate(PracticeType.RANDOM_WORDS, 50, active, language="de")
         # Should fall back to random strings with a/b
         assert len(text) > 0
         for char in text:
@@ -326,9 +320,7 @@ class TestRandomWords:
         gen = TextGenerator(config)
         active = make_active_letters("a", "b")
 
-        text = gen.generate(
-            PracticeType.RANDOM_WORDS, 50, active, language="de"
-        )
+        text = gen.generate(PracticeType.RANDOM_WORDS, 50, active, language="de")
         assert len(text) > 0
 
     def test_word_weighting_favors_words_with_struggling_letter(self, tmp_path: Path):
@@ -353,9 +345,7 @@ class TestRandomWords:
 
         words_seen: dict[str, int] = {"se": 0, "en": 0}
         for _ in range(200):
-            text = gen.generate(
-                PracticeType.RANDOM_WORDS, 5, active, language="de"
-            )
+            text = gen.generate(PracticeType.RANDOM_WORDS, 5, active, language="de")
             for word in text.split():
                 if word in words_seen:
                     words_seen[word] += 1
@@ -407,24 +397,24 @@ class TestTrainingWeight:
         assert s._state_bonus() == 1.0
 
         s.state = LetterState.STABLE
-        s.sessions_in_current_state = 20  # fully settled
+        s.rolling_keystroke_count = 1000  # fully settled
         assert s._state_bonus() == 0.0
 
     def test_recently_stable_bonus(self):
-        """Recently-stable letters get a decaying bonus."""
-        s = LetterStats(letter="a", state=LetterState.STABLE, sessions_in_current_state=0)
-        assert s._state_bonus() == 1.0  # full bonus at 0 sessions
+        """Recently-stable letters get a decaying bonus based on keystrokes."""
+        s = LetterStats(letter="a", state=LetterState.STABLE, rolling_keystroke_count=0)
+        assert s._state_bonus() == 1.0  # full bonus at 0 keystrokes
 
-        s.sessions_in_current_state = 5
-        assert abs(s._state_bonus() - 0.5) < 1e-9  # half bonus at 5/10
+        s.rolling_keystroke_count = 400
+        assert abs(s._state_bonus() - 0.5) < 1e-9  # half bonus at 400/800
 
-        s.sessions_in_current_state = 9
-        assert abs(s._state_bonus() - 0.1) < 1e-9  # 1/10 at 9 sessions
+        s.rolling_keystroke_count = 720
+        assert abs(s._state_bonus() - 0.1) < 1e-9  # 80/800 remaining
 
-        s.sessions_in_current_state = 10
+        s.rolling_keystroke_count = 800
         assert s._state_bonus() == 0.0  # fully settled
 
-        s.sessions_in_current_state = 15
+        s.rolling_keystroke_count = 1500
         assert s._state_bonus() == 0.0  # still 0
 
     def test_accuracy_gap_bonus(self):
@@ -444,8 +434,10 @@ class TestTrainingWeight:
     def test_training_weight_stable_accurate(self):
         """A fully-settled stable letter at 97% accuracy gets minimum weight."""
         s = LetterStats(
-            letter="a", state=LetterState.STABLE,
-            rolling_error_rate=0.03, sessions_in_current_state=20,
+            letter="a",
+            state=LetterState.STABLE,
+            rolling_error_rate=0.03,
+            sessions_in_current_state=20,
             rolling_keystroke_count=999,
         )
         assert s.training_weight() == 1.0  # 1.0 + 0 + 0 + 0
@@ -453,7 +445,9 @@ class TestTrainingWeight:
     def test_training_weight_introducing_fresh(self):
         """A freshly introduced letter (no errors yet) gets state bonus only."""
         s = LetterStats(
-            letter="a", state=LetterState.INTRODUCING, rolling_error_rate=0.0,
+            letter="a",
+            state=LetterState.INTRODUCING,
+            rolling_error_rate=0.0,
             rolling_keystroke_count=999,
         )
         assert s.training_weight() == 4.0  # 1.0 + 3.0 + 0 + 0
@@ -461,7 +455,9 @@ class TestTrainingWeight:
     def test_training_weight_introducing_struggling(self):
         """An introducing letter at 85% accuracy gets both bonuses."""
         s = LetterStats(
-            letter="a", state=LetterState.INTRODUCING, rolling_error_rate=0.15,
+            letter="a",
+            state=LetterState.INTRODUCING,
+            rolling_error_rate=0.15,
             rolling_keystroke_count=999,
         )
         assert s.training_weight() == 9.0  # 1.0 + 3.0 + 5.0 + 0
@@ -469,7 +465,9 @@ class TestTrainingWeight:
     def test_training_weight_degraded_high_errors(self):
         """A degraded letter at 80% accuracy gets heavy weight."""
         s = LetterStats(
-            letter="a", state=LetterState.DEGRADED, rolling_error_rate=0.20,
+            letter="a",
+            state=LetterState.DEGRADED,
+            rolling_error_rate=0.20,
             rolling_keystroke_count=999,
         )
         assert s.training_weight() == 10.5  # 1.0 + 2.0 + 7.5 + 0
@@ -477,91 +475,110 @@ class TestTrainingWeight:
     def test_training_weight_no_cap(self):
         """Weights are uncapped — extreme error rates produce large weights."""
         s = LetterStats(
-            letter="a", state=LetterState.INTRODUCING, rolling_error_rate=0.30,
+            letter="a",
+            state=LetterState.INTRODUCING,
+            rolling_error_rate=0.30,
             rolling_keystroke_count=999,
         )
         # 1.0 + 3.0 + (0.30-0.05)*50 = 1.0 + 3.0 + 12.5 = 16.5
         assert s.training_weight() == 16.5
 
     def test_training_weight_recently_stable(self):
-        """A recently-stable letter gets consolidation bonus."""
+        """A recently-stable letter gets keystroke-based consolidation bonus."""
         s = LetterStats(
-            letter="a", state=LetterState.STABLE,
-            rolling_error_rate=0.03, sessions_in_current_state=0,
-            rolling_keystroke_count=999,
-        )
-        assert s.training_weight() == 2.0  # 1.0 + 1.0 + 0 + 0
-
-        s.sessions_in_current_state = 5
-        assert abs(s.training_weight() - 1.5) < 1e-9  # 1.0 + 0.5 + 0 + 0
-
-    def test_training_weight_volume_deficit_full(self):
-        """A letter with 0 keystrokes gets the full volume deficit bonus."""
-        s = LetterStats(
-            letter="a", state=LetterState.STABLE,
-            rolling_error_rate=0.03, sessions_in_current_state=20,
+            letter="a",
+            state=LetterState.STABLE,
+            rolling_error_rate=0.03,
             rolling_keystroke_count=0,
         )
-        assert s.training_weight() == 2.0  # 1.0 + 0 + 0 + 1.0
+        # base(1.0) + state(1.0, 0 keystrokes) + acc(0) + vol(1.0, 0 ks) = 3.0
+        assert s.training_weight() == 3.0
+
+        s.rolling_keystroke_count = 400
+        # state = 1.0 * (1 - 400/800) = 0.5
+        # vol: 400 is in the fade zone (170-230 for window=200)... actually
+        # 400 > 230, so vol = 0.0
+        # total = 1.0 + 0.5 + 0 + 0 = 1.5
+        assert abs(s.training_weight() - 1.5) < 1e-9
+
+    def test_training_weight_volume_deficit_full(self):
+        """A MASTERED letter with 0 keystrokes gets the full volume deficit bonus."""
+        s = LetterStats(
+            letter="a",
+            state=LetterState.MASTERED,
+            rolling_error_rate=0.03,
+            rolling_keystroke_count=0,
+        )
+        # base(0.5) + state(0) + acc(0) + vol(1.0) = 1.5
+        assert s.training_weight() == 1.5
 
     def test_training_weight_volume_deficit_below_fade_start(self):
         """Volume deficit bonus is full until 85% of window (170 for window=200)."""
         s = LetterStats(
-            letter="a", state=LetterState.STABLE,
-            rolling_error_rate=0.03, sessions_in_current_state=20,
+            letter="a",
+            state=LetterState.MASTERED,
+            rolling_error_rate=0.03,
             rolling_keystroke_count=100,
         )
-        assert s.training_weight() == 2.0  # 1.0 + 0 + 0 + 1.0
+        assert s.training_weight() == 1.5  # base(0.5) + vol(1.0)
 
         s.rolling_keystroke_count = 170
-        assert s.training_weight() == 2.0  # still full bonus at fade_start
+        assert s.training_weight() == 1.5  # still full bonus at fade_start
 
     def test_training_weight_volume_deficit_at_window(self):
         """At exactly the window size (200), bonus is 0.5."""
         s = LetterStats(
-            letter="a", state=LetterState.STABLE,
-            rolling_error_rate=0.03, sessions_in_current_state=20,
+            letter="a",
+            state=LetterState.MASTERED,
+            rolling_error_rate=0.03,
             rolling_keystroke_count=200,
         )
-        assert abs(s.training_weight() - 1.5) < 1e-9  # 1.0 + 0 + 0 + 0.5
+        assert abs(s.training_weight() - 1.0) < 1e-9  # 0.5 + 0 + 0 + 0.5
 
     def test_training_weight_volume_deficit_above_fade_end(self):
         """At and above fade_end (230 for window=200), bonus is 0."""
         s = LetterStats(
-            letter="a", state=LetterState.STABLE,
-            rolling_error_rate=0.03, sessions_in_current_state=20,
+            letter="a",
+            state=LetterState.MASTERED,
+            rolling_error_rate=0.03,
             rolling_keystroke_count=230,
         )
-        assert s.training_weight() == 1.0  # 1.0 + 0 + 0 + 0
+        assert s.training_weight() == 0.5  # 0.5 + 0 + 0 + 0
 
         s.rolling_keystroke_count = 300
-        assert s.training_weight() == 1.0
+        assert s.training_weight() == 0.5
 
     def test_training_weight_volume_deficit_midpoint(self):
         """At 185 keystrokes (midway through fade), bonus is ~0.75."""
         import math
+
         s = LetterStats(
-            letter="a", state=LetterState.STABLE,
-            rolling_error_rate=0.03, sessions_in_current_state=20,
+            letter="a",
+            state=LetterState.MASTERED,
+            rolling_error_rate=0.03,
             rolling_keystroke_count=185,
         )
         # t = (185 - 170) / 60 = 0.25, cos(0.25*pi) ≈ 0.707
         expected_bonus = 0.5 * (1.0 + math.cos(math.pi * 0.25))
-        assert abs(s.training_weight() - (1.0 + expected_bonus)) < 1e-6
+        assert abs(s.training_weight() - (0.5 + expected_bonus)) < 1e-6
 
     def test_training_weight_volume_deficit_custom_weight(self):
         """Volume deficit bonus scales with the weight parameter."""
         s = LetterStats(
-            letter="a", state=LetterState.STABLE,
-            rolling_error_rate=0.03, sessions_in_current_state=20,
+            letter="a",
+            state=LetterState.MASTERED,
+            rolling_error_rate=0.03,
             rolling_keystroke_count=0,
         )
-        assert s.training_weight(volume_deficit=2.0) == 3.0  # 1.0 + 0 + 0 + 2.0
+        # base(0.5) + state(0) + acc(0) + vol(2.0) = 2.5
+        assert s.training_weight(volume_deficit=2.0) == 2.5
 
     def test_training_weight_volume_deficit_stacks_with_state(self):
         """Volume deficit stacks with state and accuracy gap bonuses."""
         s = LetterStats(
-            letter="a", state=LetterState.INTRODUCING, rolling_error_rate=0.15,
+            letter="a",
+            state=LetterState.INTRODUCING,
+            rolling_error_rate=0.15,
             rolling_keystroke_count=0,
         )
         # 1.0 + 3.0 (introducing) + 5.0 (gap) + 1.0 (volume) = 10.0
@@ -571,18 +588,24 @@ class TestTrainingWeight:
         """At 20 settled stable + 1 introducing, the new letter gets ~20% of raw weight."""
         stable = [
             LetterStats(
-                letter=chr(ord("a") + i), state=LetterState.STABLE,
-                rolling_error_rate=0.03, sessions_in_current_state=20,
+                letter=chr(ord("a") + i),
+                state=LetterState.STABLE,
+                rolling_error_rate=0.03,
+                sessions_in_current_state=20,
                 rolling_keystroke_count=999,
             )
             for i in range(20)
         ]
         introducing = LetterStats(
-            letter="z", state=LetterState.INTRODUCING, rolling_error_rate=0.0,
+            letter="z",
+            state=LetterState.INTRODUCING,
+            rolling_error_rate=0.0,
             rolling_keystroke_count=0,
         )
 
-        total_weight = sum(s.training_weight() for s in stable) + introducing.training_weight()
+        total_weight = (
+            sum(s.training_weight() for s in stable) + introducing.training_weight()
+        )
         new_share = introducing.training_weight() / total_weight
         # 5.0 / (20*1.0 + 5.0) = 5/25 = 0.20
         assert abs(new_share - 5.0 / 25.0) < 0.01
@@ -597,8 +620,10 @@ class TestShareCap:
         gen = TextGenerator(config)
         active = {
             letter: LetterStats(
-                letter=letter, state=LetterState.STABLE,
-                rolling_error_rate=0.03, rolling_keystroke_count=999,
+                letter=letter,
+                state=LetterState.STABLE,
+                rolling_error_rate=0.03,
+                rolling_keystroke_count=999,
             )
             for letter in "enirs"
         }
@@ -615,13 +640,17 @@ class TestShareCap:
         gen = TextGenerator(config)
         active = {
             letter: LetterStats(
-                letter=letter, state=LetterState.STABLE,
-                rolling_error_rate=0.03, rolling_keystroke_count=999,
+                letter=letter,
+                state=LetterState.STABLE,
+                rolling_error_rate=0.03,
+                rolling_keystroke_count=999,
             )
             for letter in "enirs"
         }
         active["z"] = LetterStats(
-            letter="z", state=LetterState.INTRODUCING, rolling_error_rate=0.0,
+            letter="z",
+            state=LetterState.INTRODUCING,
+            rolling_error_rate=0.0,
             rolling_keystroke_count=999,
         )
         letters, weights = gen._compute_weights(active)
@@ -641,13 +670,17 @@ class TestShareCap:
         gen = TextGenerator(config)
         active = {
             letter: LetterStats(
-                letter=letter, state=LetterState.STABLE,
-                rolling_error_rate=0.03, rolling_keystroke_count=999,
+                letter=letter,
+                state=LetterState.STABLE,
+                rolling_error_rate=0.03,
+                rolling_keystroke_count=999,
             )
             for letter in "en"
         }
         active["z"] = LetterStats(
-            letter="z", state=LetterState.INTRODUCING, rolling_error_rate=0.30,
+            letter="z",
+            state=LetterState.INTRODUCING,
+            rolling_error_rate=0.30,
             rolling_keystroke_count=999,
         )
         letters, weights = gen._compute_weights(active)
@@ -664,8 +697,10 @@ class TestShareCap:
         gen = TextGenerator(config)
         active = {
             letter: LetterStats(
-                letter=letter, state=LetterState.CONSOLIDATING,
-                rolling_error_rate=0.03, rolling_keystroke_count=999,
+                letter=letter,
+                state=LetterState.CONSOLIDATING,
+                rolling_error_rate=0.03,
+                rolling_keystroke_count=999,
             )
             for letter in "enirs"
         }
@@ -682,13 +717,17 @@ class TestShareCap:
         gen = TextGenerator(config)
         active = {
             letter: LetterStats(
-                letter=letter, state=LetterState.STABLE,
-                rolling_error_rate=0.03, rolling_keystroke_count=999,
+                letter=letter,
+                state=LetterState.STABLE,
+                rolling_error_rate=0.03,
+                rolling_keystroke_count=999,
             )
             for letter in "enirs"
         }
         active["z"] = LetterStats(
-            letter="z", state=LetterState.INTRODUCING, rolling_error_rate=0.15,
+            letter="z",
+            state=LetterState.INTRODUCING,
+            rolling_error_rate=0.15,
             rolling_keystroke_count=999,
         )
         letters, weights = gen._compute_weights(active)
@@ -711,12 +750,16 @@ class TestShareCap:
         gen = TextGenerator(config)
         active = {
             "e": LetterStats(
-                letter="e", state=LetterState.STABLE,
-                rolling_error_rate=0.03, rolling_keystroke_count=999,
+                letter="e",
+                state=LetterState.STABLE,
+                rolling_error_rate=0.03,
+                rolling_keystroke_count=999,
             ),
             "z": LetterStats(
-                letter="z", state=LetterState.INTRODUCING,
-                rolling_error_rate=0.0, rolling_keystroke_count=999,
+                letter="z",
+                state=LetterState.INTRODUCING,
+                rolling_error_rate=0.0,
+                rolling_keystroke_count=999,
             ),
         }
         letters, weights = gen._compute_weights(active)
@@ -733,20 +776,28 @@ class TestShareCap:
         # 4 letters so effective cap = max(0.25, 1/4) = 0.25
         active = {
             "e": LetterStats(
-                letter="e", state=LetterState.STABLE,
-                rolling_error_rate=0.03, rolling_keystroke_count=999,
+                letter="e",
+                state=LetterState.STABLE,
+                rolling_error_rate=0.03,
+                rolling_keystroke_count=999,
             ),
             "n": LetterStats(
-                letter="n", state=LetterState.STABLE,
-                rolling_error_rate=0.03, rolling_keystroke_count=999,
+                letter="n",
+                state=LetterState.STABLE,
+                rolling_error_rate=0.03,
+                rolling_keystroke_count=999,
             ),
             "x": LetterStats(
-                letter="x", state=LetterState.INTRODUCING,
-                rolling_error_rate=0.0, rolling_keystroke_count=999,
+                letter="x",
+                state=LetterState.INTRODUCING,
+                rolling_error_rate=0.0,
+                rolling_keystroke_count=999,
             ),
             "y": LetterStats(
-                letter="y", state=LetterState.DEGRADED,
-                rolling_error_rate=0.20, rolling_keystroke_count=999,
+                letter="y",
+                state=LetterState.DEGRADED,
+                rolling_error_rate=0.20,
+                rolling_keystroke_count=999,
             ),
         }
         letters, weights = gen._compute_weights(active)
@@ -791,9 +842,15 @@ class TestBigramWords:
     def test_max_targets_enforced(self):
         config = Config(bigram_max_targets=3)
         gen = TextGenerator(config)
-        gen.set_target_bigrams([
-            ("a", "b"), ("c", "d"), ("e", "f"), ("g", "h"), ("i", "j"),
-        ])
+        gen.set_target_bigrams(
+            [
+                ("a", "b"),
+                ("c", "d"),
+                ("e", "f"),
+                ("g", "h"),
+                ("i", "j"),
+            ]
+        )
         assert len(gen._target_bigrams) == 3
 
     def test_word_contains_bigram_detection(self):

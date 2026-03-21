@@ -20,3 +20,4 @@ papers/
 # Test / editor caches
 .pytest_cache/
 .opencode/
+.claude/

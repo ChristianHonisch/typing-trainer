@@ -127,6 +127,12 @@ class LetterStats:
     # Populated at runtime from DB query; not persisted.
     rolling_keystroke_count: int = 0
 
+    # Wide-window rolling accuracy for high-accuracy suppression.
+    # Populated at runtime from a separate DB query with a larger window
+    # (e.g., 500 keystrokes vs 200 for the standard window).
+    rolling_accuracy_wide: float = 1.0
+    rolling_keystroke_count_wide: int = 0
+
     # Mastery: long-term motor pattern encoding (0.0–1.0).
     # Builds slowly via qualifying keystrokes, decays over time.
     mastery_score: float = 0.0
@@ -146,13 +152,14 @@ class LetterStats:
         degraded: float = 2.0,
         consolidating: float = 1.0,
         recently_stable: float = 1.0,
-        recently_stable_sessions: int = 10,
+        recently_stable_keystrokes: int = 800,
     ) -> float:
         """Training weight bonus based on current letter state.
 
         New/struggling letters get more practice repetitions.
-        Recently-stable letters get a decaying bonus to solidify
-        the motor pattern before the letter is fully settled.
+        Recently-stable letters get a decaying bonus based on
+        per-letter keystroke count to solidify the motor pattern
+        before the letter is fully settled.
         MASTERED letters get no state bonus (their reduced base weight
         in training_weight() already reflects their status).
         """
@@ -167,12 +174,12 @@ class LetterStats:
                 return 0.0
             case LetterState.STABLE:
                 if (
-                    recently_stable_sessions > 0
-                    and self.sessions_in_current_state < recently_stable_sessions
+                    recently_stable_keystrokes > 0
+                    and self.rolling_keystroke_count < recently_stable_keystrokes
                 ):
-                    # Linear decay: full bonus at 0 sessions, 0 at threshold
+                    # Linear decay: full bonus at 0 keystrokes, 0 at threshold
                     return recently_stable * (
-                        1.0 - self.sessions_in_current_state / recently_stable_sessions
+                        1.0 - self.rolling_keystroke_count / recently_stable_keystrokes
                     )
                 return 0.0
             case _:
@@ -238,10 +245,13 @@ class LetterStats:
         degraded: float = 2.0,
         consolidating: float = 1.0,
         recently_stable: float = 1.0,
-        recently_stable_sessions: int = 10,
+        recently_stable_keystrokes: int = 800,
         volume_window: int = 200,
         volume_deficit: float = 1.0,
         mastered: float = 0.5,
+        high_accuracy_threshold: float = 0.98,
+        high_accuracy_min_keystrokes: int = 500,
+        high_accuracy_factor: float = 0.1,
     ) -> float:
         """Need-based training weight for text generation.
 
@@ -251,6 +261,11 @@ class LetterStats:
         need more reps), accuracy gap (struggling letters), recently-stable
         consolidation, and volume deficit.
 
+        A final multiplier suppresses highly accurate letters: if the
+        wide-window rolling accuracy exceeds ``high_accuracy_threshold``
+        and enough keystrokes have been recorded, the entire weight is
+        multiplied by ``high_accuracy_factor`` (e.g. 0.1 = 10%).
+
         Args:
             error_threshold: Error rate above which the accuracy-gap bonus
                 kicks in.  Pass ``1 - config.advancement_accuracy`` for
@@ -259,24 +274,37 @@ class LetterStats:
             degraded: State bonus for DEGRADED letters.
             consolidating: State bonus for CONSOLIDATING letters.
             recently_stable: Max consolidation bonus for recently-stable
-                letters.  Decays linearly over ``recently_stable_sessions``.
-            recently_stable_sessions: Sessions in STABLE state before the
-                consolidation bonus fully decays.
+                letters.  Decays linearly over ``recently_stable_keystrokes``.
+            recently_stable_keystrokes: Per-letter keystrokes in STABLE
+                state before the consolidation bonus fully decays.
             volume_window: Rolling accuracy window size (keystrokes).
                 Letters with fewer keystrokes get a volume deficit bonus.
             volume_deficit: Maximum volume deficit bonus.
             mastered: Base weight for MASTERED letters (replaces 1.0).
+            high_accuracy_threshold: Accuracy above which suppression applies.
+            high_accuracy_min_keystrokes: Min keystrokes in the wide window
+                before suppression can activate.
+            high_accuracy_factor: Multiply weight by this when suppressed.
         """
         base = mastered if self.state == LetterState.MASTERED else 1.0
-        return (
+        weight = (
             base
             + self._state_bonus(
                 introducing,
                 degraded,
                 consolidating,
                 recently_stable,
-                recently_stable_sessions,
+                recently_stable_keystrokes,
             )
             + self._accuracy_gap_bonus(error_threshold)
             + self._volume_deficit_bonus(volume_window, volume_deficit)
         )
+
+        # Suppress highly accurate letters (wide-window check)
+        if (
+            self.rolling_keystroke_count_wide >= high_accuracy_min_keystrokes
+            and self.rolling_accuracy_wide >= high_accuracy_threshold
+        ):
+            weight *= high_accuracy_factor
+
+        return weight

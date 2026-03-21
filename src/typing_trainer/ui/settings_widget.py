@@ -74,6 +74,10 @@ class SettingsWidget(QWidget):
     # objects need to be rebuilt.
     runtime_settings_changed = pyqtSignal()
 
+    # Emitted when any config value changes (for live preview of
+    # the letter share column in the dashboard).
+    config_value_changed = pyqtSignal()
+
     def __init__(
         self,
         config: Config,
@@ -383,7 +387,12 @@ class SettingsWidget(QWidget):
             step=0.1,
         )
         self._add_int_row(
-            adv_layout, "Recently stable sessions", "recently_stable_sessions", 1, 50
+            adv_layout,
+            "Recently stable keystrokes",
+            "recently_stable_keystrokes",
+            100,
+            5000,
+            step=100,
         )
         self._add_float_row(
             adv_layout,
@@ -393,6 +402,47 @@ class SettingsWidget(QWidget):
             1.00,
             decimals=2,
             step=0.05,
+        )
+
+        # High Accuracy Suppression
+        adv_layout.addWidget(self._make_section_label("High Accuracy Suppression"))
+        self._add_float_row(
+            adv_layout,
+            "Accuracy threshold",
+            "high_accuracy_threshold",
+            0.90,
+            1.00,
+            decimals=2,
+            step=0.01,
+            tip="Accuracy above which weight is suppressed",
+        )
+        self._add_int_row(
+            adv_layout,
+            "Window (keystrokes)",
+            "high_accuracy_window",
+            100,
+            2000,
+            step=100,
+            tip="Rolling window for the high-accuracy check",
+        )
+        self._add_int_row(
+            adv_layout,
+            "Min keystrokes",
+            "high_accuracy_min_keystrokes",
+            100,
+            2000,
+            step=100,
+            tip="Need this many keystrokes before suppression applies",
+        )
+        self._add_float_row(
+            adv_layout,
+            "Weight factor",
+            "high_accuracy_factor",
+            0.01,
+            1.00,
+            decimals=2,
+            step=0.05,
+            tip="Multiply weight by this when suppressed (0.1 = 10%)",
         )
 
         # Error Classification
@@ -552,6 +602,15 @@ class SettingsWidget(QWidget):
         btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         return btn
 
+    def _make_value_handler(self, field: str):  # type: ignore[no-untyped-def]
+        """Create a spinbox valueChanged handler that updates config and emits signal."""
+
+        def handler(value: int | float) -> None:
+            setattr(self._config, field, value)
+            self.config_value_changed.emit()
+
+        return handler
+
     def _add_int_row(
         self,
         parent_layout: QVBoxLayout,
@@ -574,7 +633,7 @@ class SettingsWidget(QWidget):
         spin.setRange(min_val, max_val)
         spin.setSingleStep(step)
         spin.setValue(getattr(self._config, field))
-        spin.valueChanged.connect(lambda v, f=field: setattr(self._config, f, v))
+        spin.valueChanged.connect(self._make_value_handler(field))
         spin.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         spin.wheelEvent = lambda event: event.ignore()  # type: ignore[assignment]
         row.addStretch()
@@ -613,7 +672,7 @@ class SettingsWidget(QWidget):
         spin.setDecimals(decimals)
         spin.setSingleStep(step)
         spin.setValue(getattr(self._config, field))
-        spin.valueChanged.connect(lambda v, f=field: setattr(self._config, f, v))
+        spin.valueChanged.connect(self._make_value_handler(field))
         spin.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         spin.wheelEvent = lambda event: event.ignore()  # type: ignore[assignment]
         row.addStretch()

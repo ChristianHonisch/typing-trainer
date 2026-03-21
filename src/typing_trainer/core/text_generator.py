@@ -187,7 +187,21 @@ class TextGenerator:
                 result.append(char)
                 chars_since_space += 1
 
-        return "".join(result[:length])
+        text = "".join(result[:length])
+
+        # Guarantee each active letter appears at least once.
+        # Replace random non-space characters with any missing letters.
+        text_chars = list(text)
+        present = set(text_chars)
+        missing = [lt for lt in letters if lt != " " and lt not in present]
+        if missing:
+            replaceable = [i for i, c in enumerate(text_chars) if c != " "]
+            random.shuffle(replaceable)
+            for letter, idx in zip(missing, replaceable):
+                text_chars[idx] = letter
+            text = "".join(text_chars)
+
+        return text
 
     def _generate_random_words(
         self,
@@ -299,10 +313,13 @@ class TextGenerator:
                     degraded=self.config.weight_degraded,
                     consolidating=self.config.weight_consolidating,
                     recently_stable=self.config.weight_recently_stable,
-                    recently_stable_sessions=self.config.recently_stable_sessions,
+                    recently_stable_keystrokes=self.config.recently_stable_keystrokes,
                     volume_window=self.config.advancement_accuracy_window,
                     volume_deficit=self.config.weight_volume_deficit,
                     mastered=self.config.weight_mastered,
+                    high_accuracy_threshold=self.config.high_accuracy_threshold,
+                    high_accuracy_min_keystrokes=self.config.high_accuracy_min_keystrokes,
+                    high_accuracy_factor=self.config.high_accuracy_factor,
                 )
             )
 

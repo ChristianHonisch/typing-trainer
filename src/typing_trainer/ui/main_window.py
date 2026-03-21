@@ -237,6 +237,7 @@ class MainWindow(QMainWindow):
         self._settings_widget.runtime_settings_changed.connect(
             self._on_runtime_settings_changed
         )
+        self._settings_widget.config_value_changed.connect(self._refresh_dashboard)
         self._main_tabs.addTab(self._settings_widget, "Settings")
 
         # Tab 1: Training
@@ -548,12 +549,18 @@ class MainWindow(QMainWindow):
         rolling_accuracy_long = self.repo.get_per_letter_rolling_accuracy(
             active_letter_list, 2000
         )
+        rolling_accuracy_wide = self.repo.get_per_letter_rolling_accuracy(
+            active_letter_list, self.config.high_accuracy_window
+        )
         for letter, stats in self._active_letters.items():
             acc, count = rolling_accuracy.get(letter, (1.0, 0))
             stats.rolling_error_rate = 1.0 - acc
             stats.rolling_keystroke_count = count
             acc_long, _count_long = rolling_accuracy_long.get(letter, (1.0, 0))
             stats.rolling_error_rate_long = 1.0 - acc_long
+            acc_wide, count_wide = rolling_accuracy_wide.get(letter, (1.0, 0))
+            stats.rolling_accuracy_wide = acc_wide
+            stats.rolling_keystroke_count_wide = count_wide
 
         # Per-run state recheck — detect degradation/recovery immediately
         # rather than waiting for session end.
@@ -571,11 +578,20 @@ class MainWindow(QMainWindow):
             letter: total for letter, (_, total, _) in error_rates.items()
         }
         run_counts = self.repo.get_per_letter_run_counts()
+        # Compute weight shares for next run
+        w_letters, w_weights = self.text_gen._compute_weights(self._active_letters)
+        total_w = sum(w_weights)
+        weight_shares = (
+            {l: w / total_w for l, w in zip(w_letters, w_weights)}
+            if total_w > 0
+            else {}
+        )
         self._letter_overview.update_display(
             self._active_letters,
             remaining,
             keystroke_counts,
             run_counts,
+            weight_shares,
         )
 
         # Config widget letter display
@@ -723,7 +739,14 @@ class MainWindow(QMainWindow):
 
         # Create typing widget
         highlight_letters = self._config_widget.get_highlight_letters()
-        typing_widget = TypingWidget(self.engine, highlight_letters=highlight_letters)
+        single_letter = self._config_widget.get_single_letter_mode()
+        show_prev = self._config_widget.get_show_prev_result()
+        typing_widget = TypingWidget(
+            self.engine,
+            highlight_letters=highlight_letters,
+            single_letter_mode=single_letter,
+            show_prev_result=show_prev,
+        )
         typing_widget.run_finished.connect(self._on_run_finished)
         typing_widget.run_aborted.connect(self._on_run_aborted)
 

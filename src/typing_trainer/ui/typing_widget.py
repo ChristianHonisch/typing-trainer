@@ -8,13 +8,15 @@ Running accuracy display at the top.
 
 from __future__ import annotations
 
-from PyQt6.QtCore import QElapsedTimer, QRectF, Qt, pyqtSignal
+from PyQt6.QtCore import QElapsedTimer, QRectF, QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import (
     QColor,
     QFontMetricsF,
     QKeyEvent,
     QPainter,
     QPen,
+    QResizeEvent,
+    QTextBlockFormat,
     QTextCharFormat,
     QTextCursor,
 )
@@ -126,11 +128,15 @@ class TypingWidget(QWidget):
         self,
         engine: TypingEngine,
         highlight_letters: set[str] | frozenset[str] = frozenset(),
+        single_letter_mode: bool = False,
+        show_prev_result: bool = False,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.engine = engine
         self._highlight_letters: frozenset[str] = frozenset(highlight_letters)
+        self._single_letter_mode = single_letter_mode
+        self._show_prev_result = show_prev_result
         self._timer = QElapsedTimer()
         self._abort_pending = False
 
@@ -178,7 +184,14 @@ class TypingWidget(QWidget):
             """
         )
         self._text_display.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        layout.addWidget(self._text_display, stretch=1)
+
+        # Center the text display at 2/3 width: stretch(1) | text(4) | stretch(1)
+        text_row = QHBoxLayout()
+        text_row.setContentsMargins(0, 0, 0, 0)
+        text_row.addStretch(1)
+        text_row.addWidget(self._text_display, stretch=4)
+        text_row.addStretch(1)
+        layout.addLayout(text_row, stretch=1)
 
         # Status bar with abort button
         status_bar = QHBoxLayout()
@@ -240,11 +253,14 @@ class TypingWidget(QWidget):
     def _render_text(self) -> None:
         """Render the target text with color coding.
 
-        Character formatting is applied for typed/upcoming text.
-        The current cursor position is highlighted via a paint overlay
-        in CursorOverlayTextEdit, which works reliably on all characters
-        including spaces at word-wrap boundaries.
+        In single-letter mode, only the current character is shown in
+        large centered font.  Otherwise, the full target text is
+        rendered with per-character color coding and a cursor overlay.
         """
+        if self._single_letter_mode:
+            self._render_single_letter()
+            return
+
         self._text_display.clear()
         cursor = self._text_display.textCursor()
 
@@ -268,6 +284,10 @@ class TypingWidget(QWidget):
                         fmt.setForeground(QColor(COLOR_ERROR))
                         fmt.setBackground(QColor(COLOR_ERROR_BG))
                         char = actual
+                        # Prevent erroneous spaces from creating new
+                        # word-wrap points that rearrange the text.
+                        if actual == " ":
+                            char = "\u00a0"  # non-breaking space
                     else:
                         # Correct: dimmed
                         fmt.setForeground(QColor(COLOR_SUCCESS))
@@ -287,11 +307,103 @@ class TypingWidget(QWidget):
 
         self._text_display.setTextCursor(cursor)
 
+        # Defer vertical centering to after Qt completes the layout pass
+        QTimer.singleShot(0, self._apply_vertical_centering)
+
         # Set the overlay cursor highlight position.
         if pos < len(target):
             self._text_display.set_cursor_highlight(pos, target[pos])
         else:
             self._text_display.set_cursor_highlight(-1, "")
+
+    def _render_single_letter(self) -> None:
+        """Render only the current character in large centered font.
+
+        Optionally shows the result of the previous keystroke above
+        the main letter (green checkmark or red expected->actual).
+        """
+        self._text_display.clear()
+        cursor = self._text_display.textCursor()
+
+        target = self.engine.state.target_text
+        pos = self.engine.state.cursor_position
+        first_inputs = self.engine.state.first_inputs
+        font_family = app_font(18).family()
+
+        # Center-align the text block
+        block_fmt = QTextBlockFormat()
+        block_fmt.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        cursor.setBlockFormat(block_fmt)
+
+        # Previous keystroke result (optional)
+        if self._show_prev_result and pos > 0:
+            prev_idx = pos - 1
+            prev_fmt = QTextCharFormat()
+            prev_fmt.setFontFamily(font_family)
+            prev_fmt.setFontPointSize(24)
+
+            if prev_idx in first_inputs:
+                actual, error_type = first_inputs[prev_idx]
+                if error_type == ErrorType.COGNITIVE_ERROR:
+                    expected_ch = target[prev_idx]
+                    exp_display = "\u00b7" if expected_ch == " " else expected_ch
+                    act_display = "\u00b7" if actual == " " else actual
+                    prev_fmt.setForeground(QColor(COLOR_ERROR))
+                    cursor.insertText(f"{exp_display}\u2192{act_display}", prev_fmt)
+                else:
+                    prev_fmt.setForeground(QColor(COLOR_SUCCESS))
+                    cursor.insertText("\u2713", prev_fmt)
+            else:
+                prev_fmt.setForeground(QColor(COLOR_SUCCESS))
+                cursor.insertText("\u2713", prev_fmt)
+
+            cursor.insertText("\n")
+
+        # Main letter
+        if pos < len(target):
+            char = target[pos]
+            display = "\u00b7" if char == " " else char
+
+            main_fmt = QTextCharFormat()
+            main_fmt.setFontFamily(font_family)
+            main_fmt.setFontPointSize(72)
+            main_fmt.setForeground(QColor(COLOR_TEXT_BRIGHT))
+            cursor.insertText(display, main_fmt)
+
+        self._text_display.setTextCursor(cursor)
+
+        # No cursor overlay needed in single-letter mode
+        self._text_display.set_cursor_highlight(-1, "")
+
+        QTimer.singleShot(0, self._apply_vertical_centering)
+
+    def _apply_vertical_centering(self) -> None:
+        """Set the first block's top margin to vertically center text."""
+        doc = self._text_display.document()
+        viewport = self._text_display.viewport()
+        if doc is None or viewport is None:
+            return
+
+        # Reset top margin to 0, measure natural doc height, then compute
+        cursor = self._text_display.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.Start)
+        block_fmt = cursor.blockFormat()
+        block_fmt.setTopMargin(0)
+        cursor.setBlockFormat(block_fmt)
+
+        doc.adjustSize()
+        doc_height = doc.size().height()
+        viewport_height = viewport.height()
+        top_margin = max(0.0, (viewport_height - doc_height) / 2)
+
+        block_fmt.setTopMargin(top_margin)
+        cursor.setBlockFormat(block_fmt)
+
+    def resizeEvent(self, event: QResizeEvent | None) -> None:  # type: ignore[override]
+        """Re-center text vertically when the widget is resized."""
+        super().resizeEvent(event)
+        if hasattr(self, "_text_display"):
+            self._apply_vertical_centering()
 
     def _update_stats(self) -> None:
         """Update the accuracy and progress displays."""
