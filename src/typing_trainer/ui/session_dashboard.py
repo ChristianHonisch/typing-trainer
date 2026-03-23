@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 
 from PyQt6.QtCore import Qt
@@ -22,6 +21,7 @@ from typing_trainer.core.letter_manager import (
     PerLetterProgress,
 )
 from typing_trainer.core.spaced_repetition import ReviewStatus
+from typing_trainer.models.letter_state import DisplayMode
 from typing_trainer.ui.theme import (
     COLOR_ALERT,
     COLOR_BG_DARK,
@@ -29,6 +29,8 @@ from typing_trainer.ui.theme import (
     COLOR_BG_TERTIARY,
     COLOR_ERROR,
     COLOR_SUCCESS,
+    COLOR_TEXT_BRIGHT,
+    COLOR_TEXT_MUTED,
     COLOR_TEXT_PRIMARY,
     COLOR_TEXT_SECONDARY,
     COLOR_WARNING,
@@ -62,7 +64,12 @@ class SessionDashboard(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self._display_mode = DisplayMode.NERD
         self._setup_ui()
+
+    def set_display_mode(self, mode: DisplayMode) -> None:
+        """Store the display mode for rendering decisions."""
+        self._display_mode = mode
 
     def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -213,6 +220,7 @@ class SessionDashboard(QWidget):
         self,
         check: AdvancementCheck,
         error_window: dict[str, list[bool]] | None = None,
+        space_median_rt: float = 0.0,
     ) -> None:
         """Update the advancement progress display."""
         if check.next_letter is None:
@@ -222,6 +230,8 @@ class SessionDashboard(QWidget):
 
         parts: list[str] = []
         parts.append(f"Next letter: <b>'{check.next_letter}'</b>")
+        if space_median_rt > 0:
+            parts.append(f"Space baseline: {space_median_rt:.0f}ms")
         parts.append("")
 
         # Criterion 1: Keystroke volume
@@ -259,15 +269,16 @@ class SessionDashboard(QWidget):
                 blockers.append(f"{ks_need - ks} more keystrokes needed")
             for p in check.per_letter_progress:
                 if p.has_enough_data and not p.meets_accuracy:
-                    need_text = ""
+                    need_n = 0
                     if error_window and p.letter in error_window:
-                        need_text = self._compute_need_text(
+                        need_n = self._compute_keystrokes_needed(
                             error_window[p.letter],
                             p.window_size,
                             p.required_accuracy,
                         )
+                    need_text = f" (need {need_n})" if need_n > 0 else ""
                     blockers.append(
-                        f"'{p.letter}' accuracy {p.accuracy:.1%}"
+                        f"'{p.letter}' {p.accuracy:.1%}"
                         f" < {p.required_accuracy:.0%}{need_text}"
                     )
                 elif not p.has_enough_data:
@@ -298,58 +309,136 @@ class SessionDashboard(QWidget):
         return f'<span style="color:{COLOR_ERROR};">\u2718</span>'
 
     @staticmethod
-    def _compute_need_text(
-        sequence: list[bool],
-        window: int,
-        required_accuracy: float,
-    ) -> str:
-        """Compute 'need N keystrokes' text from an error window sequence."""
-        max_errors = math.floor(window * (1.0 - required_accuracy))
-        error_positions = [i for i, is_err in enumerate(sequence) if is_err]
-        n_errors = len(error_positions)
-        if n_errors <= max_errors:
-            return ""
-        excess = n_errors - max_errors
-        last_excess_pos = error_positions[excess - 1]
-        seq_len = len(sequence)
-        if seq_len >= window:
-            keystrokes_needed = last_excess_pos + 1
-        else:
-            grow_room = window - seq_len
-            keystrokes_needed = max(0, last_excess_pos + 1 - grow_room)
-        return f" (need {keystrokes_needed} keystrokes)"
+    def _accuracy_bar(accuracy: float, threshold: float = 0.95) -> str:
+        """Build an HTML accuracy bar (12 chars, 92%–100%, ~0.67%/step).
 
-    @staticmethod
+        Characters:
+          ``·``  filler (grey)
+          ``|``  threshold marker (bright)
+          ``*``  current accuracy (green/yellow/red)
+          ``<``  accuracy below 92% (red)
+        """
+        lo = 0.92
+        hi = 1.00
+        width = 12
+
+        thresh_pos = round((threshold - lo) / (hi - lo) * (width - 1))
+        if accuracy < lo:
+            acc_pos = -1
+        else:
+            acc_pos = round((accuracy - lo) / (hi - lo) * (width - 1))
+            acc_pos = max(0, min(acc_pos, width - 1))
+
+        # Determine star color
+        if accuracy >= threshold:
+            star_color = COLOR_SUCCESS
+        elif accuracy >= threshold - 0.02:
+            star_color = COLOR_WARNING
+        else:
+            star_color = COLOR_ERROR
+
+        parts: list[str] = []
+        for i in range(width):
+            if acc_pos == -1 and i == 0:
+                parts.append(f'<span style="color:{COLOR_ERROR};">&lt;</span>')
+            elif i == acc_pos and i == thresh_pos:
+                # Accuracy exactly at threshold — show star
+                parts.append(f'<span style="color:{star_color};">*</span>')
+            elif i == acc_pos:
+                parts.append(f'<span style="color:{star_color};">*</span>')
+            elif i == thresh_pos:
+                parts.append(f'<span style="color:{COLOR_TEXT_BRIGHT};">|</span>')
+            else:
+                parts.append(f'<span style="color:{COLOR_TEXT_MUTED};">\u00b7</span>')
+
+        return "".join(parts)
+
     def _format_letter_progress(
+        self,
         p: PerLetterProgress,
         error_window: dict[str, list[bool]] | None = None,
     ) -> str:
-        """Format a single letter's accuracy progress line."""
-        if p.keystrokes_in_window == 0:
-            color = COLOR_WARNING
-            detail = "no data"
-        elif not p.has_enough_data:
-            color = COLOR_WARNING
-            detail = f"{p.accuracy:.1%} ({p.keystrokes_in_window}/{p.window_size})"
-        elif p.meets_accuracy:
-            color = COLOR_SUCCESS
-            detail = f"{p.accuracy:.1%}"
-        else:
-            color = COLOR_ERROR
-            need_info = ""
-            if error_window and p.letter in error_window:
-                need_info = SessionDashboard._compute_need_text(
-                    error_window[p.letter],
-                    p.window_size,
-                    p.required_accuracy,
-                )
-            detail = f"{p.accuracy:.1%} &lt; {p.required_accuracy:.0%}{need_info}"
+        """Format a single letter's accuracy progress line.
 
-        data_info = f"({p.keystrokes_in_window}/{p.window_size})"
-        return (
-            f'&nbsp;&nbsp;<span style="color:{color};">'
-            f"{p.letter}: {detail} {data_info}</span>"
+        In all modes, shows a compact bar + percentage + status.
+        In EXTREME_NERD mode, appends keystroke details and error count.
+        """
+        # Compute need text
+        need_count = 0
+        if (
+            p.has_enough_data
+            and not p.meets_accuracy
+            and error_window
+            and p.letter in error_window
+        ):
+            need_count = self._compute_keystrokes_needed(
+                error_window[p.letter],
+                p.window_size,
+                p.required_accuracy,
+            )
+
+        # Bar
+        bar = self._accuracy_bar(p.accuracy, p.required_accuracy)
+
+        # Status
+        if p.keystrokes_in_window == 0:
+            status = "no data"
+        elif not p.has_enough_data:
+            status = f"{p.keystrokes_in_window}/{p.window_size}ks"
+        elif p.meets_accuracy:
+            status = "\u2713"
+        elif need_count > 0:
+            status = f"needs {need_count} correct"
+        else:
+            status = "\u2717"
+
+        # Percentage (one decimal place)
+        pct = f"{p.accuracy:.1%}"
+
+        # Build line
+        line = (
+            f'<span style="font-family:monospace;">'
+            f"{p.letter} {bar} {pct} {status}"
+            f"</span>"
         )
+        return line
+
+    @staticmethod
+    def _compute_keystrokes_needed(
+        window: list[bool],
+        window_size: int,
+        required_accuracy: float,
+    ) -> int:
+        """Compute how many correct keystrokes until accuracy meets threshold.
+
+        Each correct keystroke shifts the rolling window forward by one
+        position.  Excess errors must "fall off" the left edge of the
+        window before accuracy can reach the required level.  Returns
+        the number of correct keystrokes needed for the last excess
+        error to exit the window.
+
+        Returns 0 if the letter already meets the threshold.
+        """
+        max_errors = int(window_size * (1.0 - required_accuracy))
+        error_positions = [i for i, is_err in enumerate(window) if is_err]
+
+        if len(error_positions) <= max_errors:
+            return 0
+
+        # The error that needs to fall off is the one at the boundary:
+        # if we're allowed max_errors, the (n - max_errors)th error
+        # (from the end) is the last excess one that must leave.
+        excess_error_idx = len(error_positions) - max_errors - 1
+        excess_error_pos = error_positions[excess_error_idx]
+
+        # Distance from the left edge of the current window
+        left_edge = max(0, len(window) - window_size)
+
+        if excess_error_pos < left_edge:
+            return 0  # already outside the window
+
+        # Each correct keystroke moves the left edge right by 1
+        return excess_error_pos - left_edge + 1
 
     def update_review_status(self, statuses: list[ReviewStatus]) -> None:
         """Update the review status display."""

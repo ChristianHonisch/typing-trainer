@@ -166,13 +166,14 @@ class SpacedRepetition:
         active_letters: dict[str, LetterStats],
         now: datetime | None = None,
     ) -> tuple[dict[str, LetterStats], list[str]]:
-        """Apply time-based decay to all letters and revert any that dropped.
+        """Apply time-based stability decay and revert if needed.
 
-        Decays both stability_score and mastery_score.
         - STABLE letters whose stability drops below threshold revert to
           CONSOLIDATING.
-        - MASTERED letters whose mastery_score drops below mastery_threshold
-          revert to STABLE (sessions_in_current_state resets).
+
+        MASTERED -> STABLE degradation is now handled by RT-based checks
+        in ``LetterManager.recheck_all_states()`` rather than time-based
+        mastery score decay.
 
         Returns (updated_letters, list_of_reverted_letters).
         """
@@ -192,18 +193,5 @@ class SpacedRepetition:
                 stats.state = LetterState.CONSOLIDATING
                 stats.sessions_in_current_state = 0
                 reverted.append(stats.letter)
-
-            # Mastery decay
-            if stats.mastery_score > 0:
-                current_mastery = self.compute_mastery_decay(stats, now)
-                stats.mastery_score = current_mastery
-
-                if (
-                    stats.state == LetterState.MASTERED
-                    and current_mastery < self.config.mastery_threshold
-                ):
-                    stats.state = LetterState.STABLE
-                    stats.sessions_in_current_state = 0
-                    reverted.append(stats.letter)
 
         return active_letters, reverted

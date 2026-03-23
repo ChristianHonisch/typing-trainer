@@ -465,42 +465,55 @@ class SettingsWidget(QWidget):
         )
         self._add_int_row(adv_layout, "Warmup keystrokes", "warmup_keystrokes", 0, 20)
 
-        # Mastery
-        adv_layout.addWidget(self._make_section_label("Mastery"))
-        self._add_int_row(
-            adv_layout,
-            "Keystrokes required",
-            "mastery_keystrokes_required",
-            500,
-            10000,
-            step=500,
-        )
+        # RT-Based Mastery
+        adv_layout.addWidget(self._make_section_label("RT-Based Mastery"))
         self._add_float_row(
             adv_layout,
-            "Mastery threshold",
-            "mastery_threshold",
-            0.50,
+            "Mastery RT factor",
+            "mastery_rt_factor",
             1.00,
+            2.00,
             decimals=2,
             step=0.05,
+            tip="Letter median RT must be below this factor x space RT",
         )
         self._add_float_row(
             adv_layout,
-            "Half-life min (days)",
-            "mastery_half_life_min_days",
-            1.0,
-            365.0,
-            decimals=1,
-            step=1.0,
+            "Stable RT factor",
+            "stable_rt_factor",
+            1.00,
+            2.50,
+            decimals=2,
+            step=0.05,
+            tip="RT above this factor x space RT degrades MASTERED to STABLE",
         )
         self._add_float_row(
             adv_layout,
-            "Half-life max (days)",
-            "mastery_half_life_max_days",
-            7.0,
-            365.0,
-            decimals=1,
-            step=1.0,
+            "Mastery CV threshold",
+            "mastery_cv_threshold",
+            0.10,
+            0.50,
+            decimals=2,
+            step=0.05,
+            tip="Maximum coefficient of variation for mastery",
+        )
+        self._add_int_row(
+            adv_layout,
+            "RT window (keystrokes)",
+            "mastery_rt_window",
+            100,
+            1000,
+            step=50,
+            tip="Rolling window for RT statistics",
+        )
+        self._add_int_row(
+            adv_layout,
+            "Min keystrokes",
+            "mastery_min_keystrokes",
+            50,
+            500,
+            step=50,
+            tip="Need this many keystrokes before RT mastery evaluation",
         )
 
         # Spaced Repetition

@@ -260,17 +260,22 @@ class LetterManager:
     def recheck_all_states(
         self,
         active_letters: dict[str, LetterStats],
+        space_median_rt: float = 0.0,
     ) -> bool:
-        """Recheck letter states based on current rolling error rates.
+        """Recheck letter states based on rolling error rates and RT stats.
 
         This is a lightweight per-run state recheck.  It runs the same
         state machine as ``update_states_after_session`` but does NOT
-        modify session counters, accuracy history, mastery, or stability
-        score — those remain session-boundary-only operations.
+        modify session counters, accuracy history, or stability score
+        — those remain session-boundary-only operations.
 
-        Requires ``rolling_error_rate`` to be populated on each
-        :class:`LetterStats` before calling (done by
-        ``_refresh_dashboard`` from DB data).
+        Additionally performs RT-based mastery transitions:
+        - STABLE -> MASTERED when RT criteria are met
+        - MASTERED -> STABLE when RT degrades above threshold
+
+        Requires ``rolling_error_rate`` and RT fields (``median_rt``,
+        ``rt_cv``, ``rt_keystroke_count``, ``rt_factor``) to be
+        populated on each :class:`LetterStats` before calling.
 
         Returns ``True`` if any state changed (caller should persist).
         """
@@ -281,6 +286,53 @@ class LetterManager:
                 stats.sessions_in_current_state = 0
                 stats.state = new_state
                 changed = True
+
+        # RT-based mastery transitions (only if we have space data)
+        if space_median_rt > 0:
+            rt_changes = self._check_rt_transitions(active_letters, space_median_rt)
+            if rt_changes:
+                changed = True
+
+        return changed
+
+    def _check_rt_transitions(
+        self,
+        active_letters: dict[str, LetterStats],
+        space_median_rt: float,
+    ) -> bool:
+        """Check RT-based STABLE->MASTERED and MASTERED->STABLE transitions.
+
+        Returns ``True`` if any state changed.
+        """
+        changed = False
+        error_threshold = 1.0 - self.config.advancement_accuracy
+
+        for stats in active_letters.values():
+            if stats.rt_keystroke_count < self.config.mastery_min_keystrokes:
+                continue  # not enough data
+
+            # STABLE -> MASTERED
+            if (
+                stats.state == LetterState.STABLE
+                and stats.rt_factor > 0
+                and stats.rt_factor < self.config.mastery_rt_factor
+                and stats.rt_cv < self.config.mastery_cv_threshold
+                and stats.rolling_error_rate <= error_threshold
+            ):
+                stats.state = LetterState.MASTERED
+                stats.sessions_in_current_state = 0
+                changed = True
+
+            # MASTERED -> STABLE (RT degradation)
+            elif (
+                stats.state == LetterState.MASTERED
+                and stats.rt_factor > 0
+                and stats.rt_factor > self.config.stable_rt_factor
+            ):
+                stats.state = LetterState.STABLE
+                stats.sessions_in_current_state = 0
+                changed = True
+
         return changed
 
     def update_states_after_session(
@@ -352,39 +404,9 @@ class LetterManager:
                         stats.state = LetterState.CONSOLIDATING
                         stats.sessions_in_current_state = 0
 
-            # Update mastery — only for qualifying letters.
-            # A letter qualifies when:
-            # - Currently STABLE or MASTERED
-            # - Actually practiced this session
-            # - Rolling accuracy >= advancement_accuracy
-            # All modes (relearning, speed, transition) count equally.
-            #
-            # TODO: Mastery is reached too quickly.  The current system
-            # increments mastery_score by (qualifying_ks / mastery_ks_required)
-            # each session, which can reach the threshold in ~2-3 sessions
-            # for common letters.  Consider requiring *sustained* high
-            # precision over multiple sessions (e.g. N consecutive sessions
-            # above threshold) or a time-based requirement (e.g. must be
-            # STABLE for >= 7 days before mastery promotion).
-            if (
-                was_practiced
-                and stats.state in (LetterState.STABLE, LetterState.MASTERED)
-                and stats.rolling_error_rate <= (1.0 - self.config.advancement_accuracy)
-            ):
-                qualifying_ks = session.per_letter_keystrokes(letter)
-                if qualifying_ks > 0:
-                    delta = qualifying_ks / self.config.mastery_keystrokes_required
-                    stats.mastery_score = min(1.0, stats.mastery_score + delta)
-                    stats.mastery_qualifying_keystrokes += qualifying_ks
-
-                    # Check for STABLE -> MASTERED promotion (may have just
-                    # crossed the threshold with this session's increment)
-                    if (
-                        stats.state == LetterState.STABLE
-                        and stats.mastery_score >= self.config.mastery_threshold
-                    ):
-                        stats.state = LetterState.MASTERED
-                        stats.sessions_in_current_state = 0
+            # Mastery transitions are now RT-based and handled by
+            # _check_rt_transitions() in recheck_all_states().
+            # The old mastery_score increment logic has been removed.
 
         return active_letters, warnings
 
@@ -412,9 +434,8 @@ class LetterManager:
             case LetterState.STABLE:
                 if self._is_degraded(stats):
                     return LetterState.DEGRADED
-                # Check for MASTERED transition
-                if stats.mastery_score >= self.config.mastery_threshold:
-                    return LetterState.MASTERED
+                # STABLE -> MASTERED is now RT-based, handled by
+                # _check_rt_transitions() in recheck_all_states().
                 return LetterState.STABLE
 
             case LetterState.MASTERED:

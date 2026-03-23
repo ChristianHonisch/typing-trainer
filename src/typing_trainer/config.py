@@ -224,29 +224,40 @@ class Config:
     keeping the middle 80%.  Resists outliers from pauses, distractions,
     or OS interrupts."""
 
-    # --- Mastery ---
+    # --- RT-based mastery ---
+    mastery_rt_factor: float = 1.25
+    """Letter median RT must be below this factor x space median RT for
+    MASTERED.  E.g. 1.25 means the letter must be at most 25% slower
+    than space (the fastest, most automatic key)."""
+
+    stable_rt_factor: float = 1.50
+    """Letter median RT must be below this factor x space median RT for
+    STABLE.  Letters above this threshold degrade from MASTERED to STABLE."""
+
+    mastery_cv_threshold: float = 0.30
+    """Maximum coefficient of variation (stdev/mean) of reaction times
+    for MASTERED state.  Ensures consistent motor retrieval."""
+
+    mastery_rt_window: int = 400
+    """Number of recent correct keystrokes per letter used for RT
+    statistics (median, CV).  Larger windows require more sustained
+    performance but are more stable."""
+
+    mastery_min_keystrokes: int = 100
+    """Minimum correct keystrokes in the RT window before RT-based
+    mastery evaluation applies.  Prevents premature transitions."""
+
+    # Legacy mastery params — kept for backward compatibility with
+    # spaced_repetition.py and bootstrap_mastery().  No longer used
+    # for state transitions (RT-based mastery replaces them).
     mastery_keystrokes_required: int = 1500
-    """Total qualifying keystrokes for mastery_score delta of 1.0.
-
-    A "qualifying keystroke" is any scored keystroke (correct or cognitive
-    error, not motor overflow or burst repeat) for a letter that is in
-    STABLE or MASTERED state with rolling accuracy >= advancement_accuracy.
-    All modes (relearning, speed, transition) count equally.
-    At ~19 qualifying keystrokes per session: ~78 sessions to reach 1.0."""
-
+    """Legacy: total qualifying keystrokes for mastery_score delta."""
     mastery_threshold: float = 0.8
-    """mastery_score at which a STABLE letter transitions to MASTERED.
-
-    At 1500 required keystrokes this corresponds to ~1200 qualifying
-    keystrokes (~63 sessions of daily practice)."""
-
+    """Legacy: mastery_score threshold for MASTERED promotion."""
     mastery_half_life_min_days: float = 14.0
-    """Mastery decay half-life (days) at mastery_score = 0.0.
-
-    Scales linearly with mastery_score up to mastery_half_life_max_days."""
-
+    """Legacy: mastery decay half-life at score 0."""
     mastery_half_life_max_days: float = 90.0
-    """Mastery decay half-life (days) at mastery_score = 1.0."""
+    """Legacy: mastery decay half-life at score 1."""
 
     weight_mastered: float = 0.5
     """Base training weight for letters in MASTERED state.

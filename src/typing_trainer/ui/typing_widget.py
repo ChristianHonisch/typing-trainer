@@ -394,7 +394,9 @@ class TypingWidget(QWidget):
         doc.adjustSize()
         doc_height = doc.size().height()
         viewport_height = viewport.height()
-        top_margin = max(0.0, (viewport_height - doc_height) / 2)
+        # Account for CSS padding (20px top + 20px bottom)
+        usable_height = viewport_height - 40
+        top_margin = max(0.0, (usable_height - doc_height) / 2)
 
         block_fmt.setTopMargin(top_margin)
         cursor.setBlockFormat(block_fmt)

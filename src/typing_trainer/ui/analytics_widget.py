@@ -26,6 +26,7 @@ from typing_trainer.ui.charts.letter_occurrence_chart import LetterOccurrenceCha
 from typing_trainer.ui.charts.per_letter_chart import PerLetterChart
 from typing_trainer.ui.charts.per_letter_rt_chart import PerLetterRtChart
 from typing_trainer.ui.charts.position_chart import PositionChart
+from typing_trainer.ui.charts.rt_factor_chart import RtFactorChart
 from typing_trainer.ui.charts.run_speed_chart import RunSpeedChart
 from typing_trainer.ui.charts.swap_chart import SwapChart
 from typing_trainer.ui.charts.wpm_chart import WpmChart
@@ -128,7 +129,7 @@ class AnalyticsWidget(QWidget):
         ):
             self._nerd_bar.addTab(label)
 
-        self._nerd_bar.tabBarClicked.connect(self._on_nerd_tab_clicked)
+        self._nerd_bar.currentChanged.connect(self._on_nerd_tab_clicked)
         layout.addWidget(self._nerd_bar)
 
         # --- Lower tab bar (extreme nerd tier) ---
@@ -146,10 +147,11 @@ class AnalyticsWidget(QWidget):
             "Error Window",
             "Accuracy by Keystroke",
             "RT by Keystroke",
+            "RT Factor Trend",
         ):
             self._extreme_bar.addTab(label)
 
-        self._extreme_bar.tabBarClicked.connect(self._on_extreme_tab_clicked)
+        self._extreme_bar.currentChanged.connect(self._on_extreme_tab_clicked)
         layout.addWidget(self._extreme_bar)
 
         # --- Shared plot area ---
@@ -184,6 +186,7 @@ class AnalyticsWidget(QWidget):
         self._error_window_chart = ErrorWindowChart(self._config)
         self._keystroke_accuracy_chart = KeystrokeAccuracyChart()
         self._keystroke_rt_chart = KeystrokeRtChart()
+        self._rt_factor_chart = RtFactorChart()
 
         self._stack.addWidget(self._error_heatmap)
         self._stack.addWidget(self._confusion_matrix)
@@ -193,6 +196,7 @@ class AnalyticsWidget(QWidget):
         self._stack.addWidget(self._error_window_chart)
         self._stack.addWidget(self._keystroke_accuracy_chart)
         self._stack.addWidget(self._keystroke_rt_chart)
+        self._stack.addWidget(self._rt_factor_chart)
 
         layout.addWidget(self._stack, stretch=1)
 
@@ -217,9 +221,7 @@ class AnalyticsWidget(QWidget):
             _TAB_BAR_STYLE if self._active_bar == "nerd" else _TAB_BAR_INACTIVE_STYLE
         )
         self._extreme_bar.setStyleSheet(
-            _TAB_BAR_STYLE
-            if self._active_bar == "extreme"
-            else _TAB_BAR_INACTIVE_STYLE
+            _TAB_BAR_STYLE if self._active_bar == "extreme" else _TAB_BAR_INACTIVE_STYLE
         )
 
     @property
@@ -269,3 +271,4 @@ class AnalyticsWidget(QWidget):
         self._error_window_chart.refresh(repo)
         self._keystroke_accuracy_chart.refresh(repo)
         self._keystroke_rt_chart.refresh(repo)
+        self._rt_factor_chart.refresh(repo)

@@ -303,7 +303,7 @@ class RunConfigWidget(QWidget):
 
         self._single_letter_cb = QCheckBox("Single letter mode")
         self._single_letter_cb.setFont(app_font(10))
-        self._single_letter_cb.setChecked(False)
+        self._single_letter_cb.setChecked(True)
         self._single_letter_cb.setToolTip(
             "Show only the current letter in large font. "
             "Helps focus on individual key positions."
@@ -312,8 +312,8 @@ class RunConfigWidget(QWidget):
 
         self._show_prev_result_cb = QCheckBox("Show previous result")
         self._show_prev_result_cb.setFont(app_font(10))
-        self._show_prev_result_cb.setChecked(False)
-        self._show_prev_result_cb.setEnabled(False)
+        self._show_prev_result_cb.setChecked(True)
+        self._show_prev_result_cb.setEnabled(True)
         self._show_prev_result_cb.setToolTip(
             "Show the result of the last keystroke above the current letter."
         )

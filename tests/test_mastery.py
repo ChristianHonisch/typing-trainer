@@ -190,21 +190,23 @@ class TestMasteryDecay:
         decayed = sr.compute_mastery_decay(stats)
         assert abs(decayed - 0.5) < 0.01
 
-    def test_mastered_reverts_to_stable_on_decay(self):
-        """MASTERED letter reverts to STABLE if mastery drops below threshold."""
-        config = Config(mastery_threshold=0.8)
+    def test_mastered_no_longer_reverts_on_score_decay(self):
+        """MASTERED revert is now RT-based, not mastery-score-based.
+
+        apply_time_decay no longer checks mastery_score for MASTERED->STABLE.
+        MASTERED letters stay MASTERED through time decay; degradation is
+        detected by RT checks in recheck_all_states().
+        """
+        config = Config()
         sr = SpacedRepetition(config)
-        # Mastery 0.85, half-life ≈ 14 + 0.85*76 = 78.6 days
-        # After 30 days: 0.85 * 2^(-30/78.6) ≈ 0.85 * 0.769 ≈ 0.654
         stats = make_mastered_letter("e", mastery_score=0.85)
         stats.last_practiced = datetime.now() - timedelta(days=30)
 
         active = {"e": stats}
         active, reverted = sr.apply_time_decay(active)
 
-        assert "e" in reverted
-        assert stats.state == LetterState.STABLE
-        assert stats.mastery_score < 0.8
+        assert "e" not in reverted
+        assert stats.state == LetterState.MASTERED
 
     def test_mastered_stays_if_mastery_above_threshold(self):
         """MASTERED letter stays MASTERED if mastery is still above threshold."""
@@ -234,21 +236,80 @@ class TestMasteryDecay:
 
 
 class TestMasteryStateTransitions:
-    def test_stable_to_mastered(self):
-        """STABLE letter with mastery >= threshold transitions to MASTERED."""
-        config = Config(mastery_threshold=0.8)
-        manager = LetterManager(config)
-        stats = make_stable_letter("e", mastery_score=0.85)
-        new_state = manager._compute_new_state(stats)
-        assert new_state == LetterState.MASTERED
+    def test_stable_to_mastered_via_rt(self):
+        """STABLE letter with good RT factor transitions to MASTERED.
 
-    def test_stable_stays_stable_below_threshold(self):
-        """STABLE letter with mastery < threshold stays STABLE."""
-        config = Config(mastery_threshold=0.8)
+        _compute_new_state no longer handles STABLE->MASTERED (that's
+        done by _check_rt_transitions). This test verifies _compute_new_state
+        keeps STABLE letters as STABLE.
+        """
+        config = Config()
         manager = LetterManager(config)
-        stats = make_stable_letter("e", mastery_score=0.5)
+        stats = make_stable_letter("e")
+        stats.rt_factor = 1.10  # good factor, but _compute_new_state doesn't check RT
         new_state = manager._compute_new_state(stats)
-        assert new_state == LetterState.STABLE
+        assert new_state == LetterState.STABLE  # stays STABLE in _compute_new_state
+
+    def test_rt_based_mastery_promotion(self):
+        """STABLE -> MASTERED when RT criteria are met via recheck_all_states."""
+        config = Config(
+            mastery_rt_factor=1.25,
+            mastery_cv_threshold=0.30,
+            mastery_min_keystrokes=100,
+        )
+        manager = LetterManager(config)
+        stats = make_stable_letter("e")
+        stats.rt_factor = 1.10
+        stats.rt_cv = 0.25
+        stats.rt_keystroke_count = 200
+        stats.rolling_error_rate = 0.02  # below 5% threshold
+        active = {"e": stats}
+
+        changed = manager.recheck_all_states(active, space_median_rt=700.0)
+        assert changed
+        assert stats.state == LetterState.MASTERED
+
+    def test_rt_mastery_requires_min_keystrokes(self):
+        """STABLE stays STABLE if not enough RT data."""
+        config = Config(mastery_min_keystrokes=100)
+        manager = LetterManager(config)
+        stats = make_stable_letter("e")
+        stats.rt_factor = 1.10
+        stats.rt_cv = 0.20
+        stats.rt_keystroke_count = 50  # below minimum
+        active = {"e": stats}
+
+        changed = manager.recheck_all_states(active, space_median_rt=700.0)
+        assert not changed
+        assert stats.state == LetterState.STABLE
+
+    def test_rt_mastery_requires_low_cv(self):
+        """STABLE stays STABLE if CV is too high."""
+        config = Config(mastery_cv_threshold=0.30)
+        manager = LetterManager(config)
+        stats = make_stable_letter("e")
+        stats.rt_factor = 1.10
+        stats.rt_cv = 0.40  # too high
+        stats.rt_keystroke_count = 200
+        stats.rolling_error_rate = 0.02
+        active = {"e": stats}
+
+        changed = manager.recheck_all_states(active, space_median_rt=700.0)
+        assert not changed
+        assert stats.state == LetterState.STABLE
+
+    def test_mastered_degrades_on_rt_increase(self):
+        """MASTERED -> STABLE when RT factor exceeds stable threshold."""
+        config = Config(stable_rt_factor=1.50, mastery_min_keystrokes=100)
+        manager = LetterManager(config)
+        stats = make_mastered_letter("e")
+        stats.rt_factor = 1.60  # above stable_rt_factor
+        stats.rt_keystroke_count = 200
+        active = {"e": stats}
+
+        changed = manager.recheck_all_states(active, space_median_rt=700.0)
+        assert changed
+        assert stats.state == LetterState.STABLE
 
     def test_mastered_to_degraded(self):
         """MASTERED letter with high error rate degrades."""
@@ -283,7 +344,9 @@ class TestMasteryStateTransitions:
         """Mastery score is NOT reset when a letter degrades."""
         config = Config()
         manager = LetterManager(config)
-        active = {"e": make_mastered_letter("e", mastery_score=0.9, rolling_error_rate=0.08)}
+        active = {
+            "e": make_mastered_letter("e", mastery_score=0.9, rolling_error_rate=0.08)
+        }
         session = make_session(per_letter_errors={"e": 0.08})
 
         active, _ = manager.update_states_after_session(active, session)
@@ -296,104 +359,76 @@ class TestMasteryStateTransitions:
 # ── Mastery Increment ────────────────────────────────────────────────
 
 
-class TestMasteryIncrement:
-    def test_qualifying_letter_gains_mastery(self):
-        """STABLE letter with good accuracy gains mastery from session."""
-        config = Config(mastery_keystrokes_required=1500)
-        manager = LetterManager(config)
-        stats = make_stable_letter("e", mastery_score=0.0)
-        active = {"e": stats}
-        session = make_session(per_letter_errors={"e": 0.02}, keystrokes=350)
-        # 350 keystrokes for letter "e" in this session
+class TestRtMasterySystem:
+    """Tests for the RT-based mastery system that replaced mastery_score."""
 
-        active, _ = manager.update_states_after_session(active, session)
-
-        # delta = 350 / 1500 ≈ 0.233
-        assert active["e"].mastery_score > 0.2
-        assert active["e"].mastery_qualifying_keystrokes == 350
-
-    def test_non_qualifying_letter_no_mastery(self):
-        """INTRODUCING letter does not gain mastery."""
-        config = Config()
+    def test_introducing_not_eligible_for_mastery(self):
+        """INTRODUCING letter cannot reach MASTERED regardless of RT."""
+        config = Config(mastery_min_keystrokes=100)
         manager = LetterManager(config)
         stats = LetterStats(
             letter="e",
             state=LetterState.INTRODUCING,
-            sessions_since_introduced=0,
+            rt_factor=1.10,
+            rt_cv=0.20,
+            rt_keystroke_count=200,
             rolling_error_rate=0.02,
-            rolling_keystroke_count=999,
         )
         active = {"e": stats}
-        session = make_session(per_letter_errors={"e": 0.02})
+        changed = manager.recheck_all_states(active, space_median_rt=700.0)
+        # INTRODUCING doesn't transition to MASTERED, only through the
+        # normal state machine (INTRODUCING -> CONSOLIDATING -> STABLE)
+        assert stats.state != LetterState.MASTERED
 
-        active, _ = manager.update_states_after_session(active, session)
+    def test_high_error_rate_blocks_mastery(self):
+        """STABLE letter at exactly the error threshold can't reach MASTERED.
 
-        assert active["e"].mastery_score == 0.0
-        assert active["e"].mastery_qualifying_keystrokes == 0
+        Even with excellent RT, accuracy must be strictly above the
+        advancement_accuracy threshold (rolling_error_rate <= 0.05).
+        At exactly 5% error, the condition ``<= error_threshold`` is
+        met so technically it could promote — use 5.1% to be sure.
+        But 5.1% triggers degradation (> 0.05), so the letter degrades.
+        The net result: not MASTERED.
+        """
+        config = Config(mastery_min_keystrokes=100)
+        manager = LetterManager(config)
+        stats = make_stable_letter("e")
+        stats.rt_factor = 1.10
+        stats.rt_cv = 0.20
+        stats.rt_keystroke_count = 200
+        stats.rolling_error_rate = 0.051  # just above degradation threshold
+        active = {"e": stats}
 
-    def test_high_error_rate_no_mastery(self):
-        """STABLE letter with poor accuracy doesn't gain mastery."""
+        changed = manager.recheck_all_states(active, space_median_rt=700.0)
+        # Degraded due to error rate, certainly not MASTERED
+        assert stats.state != LetterState.MASTERED
+
+    def test_no_mastery_without_space_data(self):
+        """No RT transitions when space_median_rt is 0 (no space data)."""
         config = Config()
         manager = LetterManager(config)
-        stats = make_stable_letter("e", mastery_score=0.3, rolling_error_rate=0.08)
+        stats = make_stable_letter("e")
+        stats.rt_factor = 1.10
+        stats.rt_cv = 0.20
+        stats.rt_keystroke_count = 200
         active = {"e": stats}
-        session = make_session(per_letter_errors={"e": 0.08})
 
-        active, _ = manager.update_states_after_session(active, session)
+        changed = manager.recheck_all_states(active, space_median_rt=0.0)
+        assert not changed
+        assert stats.state == LetterState.STABLE
 
-        # Mastery should not increase (error rate > 5%)
-        assert active["e"].mastery_score == 0.3
-
-    def test_mastery_capped_at_1(self):
-        """Mastery score cannot exceed 1.0."""
-        config = Config(mastery_keystrokes_required=100)
+    def test_mastered_stays_mastered_with_good_rt(self):
+        """MASTERED letter with good RT factor stays MASTERED."""
+        config = Config(stable_rt_factor=1.50, mastery_min_keystrokes=100)
         manager = LetterManager(config)
-        stats = make_stable_letter("e", mastery_score=0.95)
+        stats = make_mastered_letter("e")
+        stats.rt_factor = 1.20  # below stable_rt_factor (good)
+        stats.rt_keystroke_count = 200
         active = {"e": stats}
-        session = make_session(per_letter_errors={"e": 0.01}, keystrokes=350)
 
-        active, _ = manager.update_states_after_session(active, session)
-
-        assert active["e"].mastery_score == 1.0
-
-    def test_mastery_triggers_mastered_transition(self):
-        """Mastery increment crossing threshold triggers STABLE -> MASTERED."""
-        config = Config(mastery_threshold=0.8, mastery_keystrokes_required=100)
-        manager = LetterManager(config)
-        stats = make_stable_letter("e", mastery_score=0.75)
-        active = {"e": stats}
-        # 350 / 100 = 3.5 delta → 0.75 + 3.5 = 4.25, capped to 1.0
-        session = make_session(per_letter_errors={"e": 0.01}, keystrokes=350)
-
-        active, _ = manager.update_states_after_session(active, session)
-
-        assert active["e"].state == LetterState.MASTERED
-        assert active["e"].mastery_score == 1.0
-
-    def test_mastered_letter_continues_gaining(self):
-        """MASTERED letter continues to gain mastery from practice."""
-        config = Config(mastery_keystrokes_required=1500)
-        manager = LetterManager(config)
-        stats = make_mastered_letter("e", mastery_score=0.85)
-        active = {"e": stats}
-        session = make_session(per_letter_errors={"e": 0.02}, keystrokes=350)
-
-        active, _ = manager.update_states_after_session(active, session)
-
-        # delta = 350 / 1500 ≈ 0.233 → 0.85 + 0.233 = 1.0 (capped)
-        assert active["e"].mastery_score > 0.85
-
-    def test_unpracticed_letter_no_mastery_change(self):
-        """Letter not practiced in a session gets no mastery increment."""
-        config = Config()
-        manager = LetterManager(config)
-        stats = make_stable_letter("e", mastery_score=0.5)
-        active = {"e": stats}
-        session = make_session(per_letter_errors={})  # "e" not practiced
-
-        active, _ = manager.update_states_after_session(active, session)
-
-        assert active["e"].mastery_score == 0.5
+        changed = manager.recheck_all_states(active, space_median_rt=700.0)
+        assert not changed
+        assert stats.state == LetterState.MASTERED
 
 
 # ── Session Helper ───────────────────────────────────────────────────

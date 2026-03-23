@@ -133,15 +133,28 @@ class LetterStats:
     rolling_accuracy_wide: float = 1.0
     rolling_keystroke_count_wide: int = 0
 
-    # Mastery: long-term motor pattern encoding (0.0–1.0).
-    # Builds slowly via qualifying keystrokes, decays over time.
+    # RT-based mastery statistics.
+    # Populated at runtime from DB query; not persisted.
+    median_rt: float = 0.0
+    """Median reaction time (ms) over the RT mastery window."""
+
+    rt_cv: float = 0.0
+    """Coefficient of variation of reaction times."""
+
+    rt_keystroke_count: int = 0
+    """Number of correct keystrokes in the RT mastery window."""
+
+    rt_factor: float = 0.0
+    """Ratio of this letter's median RT to space median RT.
+    Lower is better.  < mastery_rt_factor = mastery candidate."""
+
+    # Legacy mastery fields — kept for DB schema compatibility.
+    # No longer updated; RT-based mastery is used instead.
     mastery_score: float = 0.0
-    """Long-term mastery score. Builds via qualifying keystrokes when
-    STABLE/MASTERED with rolling accuracy >= advancement_accuracy.
-    STABLE -> MASTERED at mastery_threshold (default 0.8)."""
+    """Legacy mastery score (no longer updated)."""
 
     mastery_qualifying_keystrokes: int = 0
-    """Lifetime total of qualifying keystrokes for this letter.
+    """Legacy qualifying keystrokes (no longer updated).
     Informational — NOT used to compute mastery_score (the score is
     tracked independently, pushed up by practice, pulled down by decay).
     Freezes (does not reset) on degradation."""

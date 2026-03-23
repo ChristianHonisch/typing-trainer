@@ -29,6 +29,7 @@ from typing_trainer.ui.theme import (
     COLOR_MASTERED,
     COLOR_TEXT_BRIGHT,
     COLOR_TEXT_MUTED,
+    COLOR_TEXT_SECONDARY,
     COLOR_WARNING,
     STATE_COLORS,
     app_font,
@@ -86,10 +87,10 @@ class LetterOverviewWidget(QWidget):
                 "Letter",
                 "State",
                 "Keystrokes",
-                "Last Err",
                 "Rolling Err",
-                "Stability",
-                "Mastery",
+                "Median RT",
+                "Factor",
+                "CV",
                 "Runs",
                 "Share",
             ]
@@ -102,6 +103,12 @@ class LetterOverviewWidget(QWidget):
         self._table.setSortingEnabled(True)
         layout.addWidget(self._table)
 
+        # Space baseline RT label
+        self._space_label = QLabel("")
+        self._space_label.setFont(app_font(9))
+        self._space_label.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY};")
+        layout.addWidget(self._space_label)
+
     def update_display(
         self,
         active_letters: dict[str, LetterStats],
@@ -109,6 +116,7 @@ class LetterOverviewWidget(QWidget):
         keystroke_counts: dict[str, int] | None = None,
         run_counts: dict[str, int] | None = None,
         weight_shares: dict[str, float] | None = None,
+        space_median_rt: float = 0.0,
     ) -> None:
         """Refresh the table with current letter states.
 
@@ -117,6 +125,7 @@ class LetterOverviewWidget(QWidget):
             remaining_letters: Letters not yet introduced, in introduction
                 order.  Displayed as greyed-out "Locked" rows below the
                 active letters.
+            space_median_rt: Space key median RT for display context.
             keystroke_counts: Total all-time keystrokes per letter (from
                 :meth:`Repository.get_per_letter_error_rates`).
             run_counts: Number of distinct runs each letter appeared in
@@ -124,6 +133,12 @@ class LetterOverviewWidget(QWidget):
         """
         # Disable sorting while populating to avoid crashes
         self._table.setSortingEnabled(False)
+
+        # Update space baseline label
+        if space_median_rt > 0:
+            self._space_label.setText(f"Space baseline: {space_median_rt:.0f}ms")
+        else:
+            self._space_label.setText("")
 
         letters = sorted(active_letters.keys())
         locked = remaining_letters or []
@@ -151,15 +166,6 @@ class LetterOverviewWidget(QWidget):
             ks_item = _NumericTableItem(f"{ks_val:,}", float(ks_val))
             self._table.setItem(row, 2, ks_item)
 
-            # Last error rate (most recent session)
-            last_err_val = stats.error_rate_latest
-            last_err_item = _NumericTableItem(f"{last_err_val:.1%}", last_err_val)
-            if last_err_val > 0.08:
-                last_err_item.setForeground(QColor(COLOR_ERROR))
-            elif last_err_val > 0.05:
-                last_err_item.setForeground(QColor(COLOR_WARNING))
-            self._table.setItem(row, 3, last_err_item)
-
             # Rolling error rate (2000-keystroke window)
             rolling_val = stats.rolling_error_rate_long
             rolling_err_item = _NumericTableItem(f"{rolling_val:.1%}", rolling_val)
@@ -167,21 +173,37 @@ class LetterOverviewWidget(QWidget):
                 rolling_err_item.setForeground(QColor(COLOR_ERROR))
             elif rolling_val > 0.05:
                 rolling_err_item.setForeground(QColor(COLOR_WARNING))
-            self._table.setItem(row, 4, rolling_err_item)
+            self._table.setItem(row, 3, rolling_err_item)
 
-            # Stability
-            stab_val = stats.stability_score
-            stability_item = _NumericTableItem(f"{stab_val:.2f}", stab_val)
-            if stab_val < 0.5:
-                stability_item.setForeground(QColor(COLOR_ERROR))
-            self._table.setItem(row, 5, stability_item)
+            # Median RT
+            rt_val = stats.median_rt
+            if rt_val > 0:
+                rt_item = _NumericTableItem(f"{rt_val:.0f}ms", rt_val)
+            else:
+                rt_item = _NumericTableItem("\u2014", -1.0)
+            self._table.setItem(row, 4, rt_item)
 
-            # Mastery
-            mast_val = stats.mastery_score
-            mastery_item = _NumericTableItem(f"{mast_val:.2f}", mast_val)
-            if mast_val >= 0.8:
-                mastery_item.setForeground(QColor(COLOR_MASTERED))
-            self._table.setItem(row, 6, mastery_item)
+            # Factor (RT / space median RT)
+            factor_val = stats.rt_factor
+            if factor_val > 0:
+                factor_item = _NumericTableItem(f"{factor_val:.2f}x", factor_val)
+                if factor_val < 1.25:
+                    factor_item.setForeground(QColor(COLOR_MASTERED))
+                elif factor_val > 1.80:
+                    factor_item.setForeground(QColor(COLOR_ERROR))
+                elif factor_val > 1.50:
+                    factor_item.setForeground(QColor(COLOR_WARNING))
+            else:
+                factor_item = _NumericTableItem("\u2014", -1.0)
+            self._table.setItem(row, 5, factor_item)
+
+            # CV (coefficient of variation)
+            cv_val = stats.rt_cv
+            if stats.rt_keystroke_count > 0:
+                cv_item = _NumericTableItem(f"{cv_val:.2f}", cv_val)
+            else:
+                cv_item = _NumericTableItem("\u2014", -1.0)
+            self._table.setItem(row, 6, cv_item)
 
             # Runs (distinct runs this letter appeared in)
             rc = run_counts or {}

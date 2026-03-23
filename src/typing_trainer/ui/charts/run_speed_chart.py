@@ -23,7 +23,9 @@ import numpy as np
 import pyqtgraph as pg
 
 from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QHBoxLayout,
     QLabel,
@@ -42,6 +44,7 @@ from typing_trainer.ui.theme import (
     COLOR_SUCCESS,
     COLOR_TEXT_PRIMARY,
     COLOR_TEXT_SECONDARY,
+    COLOR_WARNING,
     app_font,
 )
 
@@ -110,6 +113,17 @@ class RunSpeedChart(QWidget):
         self._exclude_spin.valueChanged.connect(self._redraw)
         controls.addWidget(self._exclude_spin)
 
+        controls.addSpacing(20)
+
+        self._segment_cb = QCheckBox("Segment view")
+        self._segment_cb.setFont(app_font(10))
+        self._segment_cb.setChecked(False)
+        self._segment_cb.setToolTip(
+            "Show median RT per 20-keystroke segment alongside the position chart"
+        )
+        self._segment_cb.stateChanged.connect(self._on_segment_toggled)
+        controls.addWidget(self._segment_cb)
+
         controls.addStretch()
         layout.addLayout(controls)
 
@@ -121,7 +135,10 @@ class RunSpeedChart(QWidget):
         self._empty_label.setVisible(False)
         layout.addWidget(self._empty_label)
 
-        # --- Plot ---
+        # --- Plots (side by side when segment view is active) ---
+        self._charts_row = QHBoxLayout()
+
+        # --- Position plot ---
         self._plot = pg.PlotWidget()
         self._plot.setBackground(COLOR_BG_DARK)
         self._plot.showGrid(x=True, y=True, alpha=0.15)
@@ -129,7 +146,20 @@ class RunSpeedChart(QWidget):
         self._plot.setLabel("bottom", "Position", color=COLOR_TEXT_PRIMARY)
         self._plot.getAxis("left").setTextPen(COLOR_TEXT_SECONDARY)
         self._plot.getAxis("bottom").setTextPen(COLOR_TEXT_SECONDARY)
-        layout.addWidget(self._plot, stretch=1)
+        self._charts_row.addWidget(self._plot, stretch=1)
+
+        # --- Segment plot (hidden by default) ---
+        self._segment_plot = pg.PlotWidget()
+        self._segment_plot.setBackground(COLOR_BG_DARK)
+        self._segment_plot.showGrid(x=True, y=True, alpha=0.15)
+        self._segment_plot.setLabel("left", "Median RT (ms)", color=COLOR_TEXT_PRIMARY)
+        self._segment_plot.setLabel("bottom", "Segment", color=COLOR_TEXT_PRIMARY)
+        self._segment_plot.getAxis("left").setTextPen(COLOR_TEXT_SECONDARY)
+        self._segment_plot.getAxis("bottom").setTextPen(COLOR_TEXT_SECONDARY)
+        self._segment_plot.setVisible(False)
+        self._charts_row.addWidget(self._segment_plot, stretch=1)
+
+        layout.addLayout(self._charts_row, stretch=1)
 
     # ------------------------------------------------------------------
 
@@ -182,6 +212,13 @@ class RunSpeedChart(QWidget):
 
     def _on_run_changed(self, index: int) -> None:
         self._load_and_draw()
+
+    def _on_segment_toggled(self) -> None:
+        """Show/hide segment chart and redraw if needed."""
+        show = self._segment_cb.isChecked()
+        self._segment_plot.setVisible(show)
+        if show and self._current_run is not None:
+            self._draw_segment(self._current_run)
 
     def _load_and_draw(self) -> None:
         """Load keystroke data for the selected run and redraw."""
@@ -400,3 +437,62 @@ class RunSpeedChart(QWidget):
         # ── Y range ──
         if y_max > 0:
             self._plot.getViewBox().setYRange(0, y_max * 1.15, padding=0)
+
+        # ── Segment chart (if toggled on) ──
+        if self._segment_cb.isChecked() and self._current_run is not None:
+            self._draw_segment(self._current_run)
+
+    def _draw_segment(self, result: RunResult) -> None:
+        """Draw median RT per 20-keystroke segment as a bar chart."""
+        self._segment_plot.clear()
+
+        _SEG_SIZE = 20
+        rts: list[int] = []
+        for ks in result.keystrokes:
+            if ks.is_backspace:
+                continue
+            if ks.position < self._warmup:
+                continue
+            if ks.error_type in (ErrorType.MOTOR_OVERFLOW, ErrorType.BURST_REPEAT):
+                continue
+            if ks.reaction_time_ms is None or ks.reaction_time_ms > RT_CAP_MS:
+                continue
+            rts.append(ks.reaction_time_ms)
+
+        if len(rts) < _SEG_SIZE:
+            return
+
+        n_segments = len(rts) // _SEG_SIZE
+        seg_medians: list[float] = []
+        seg_labels: list[str] = []
+
+        for s in range(n_segments):
+            chunk = sorted(rts[s * _SEG_SIZE : (s + 1) * _SEG_SIZE])
+            seg_medians.append(float(chunk[len(chunk) // 2]))
+            seg_labels.append(str(s * _SEG_SIZE + 1))
+
+        if not seg_medians:
+            return
+
+        x = np.arange(len(seg_medians), dtype=np.float64)
+        heights = np.array(seg_medians, dtype=np.float64)
+
+        overall_median = float(sorted(rts)[len(rts) // 2])
+        brushes = [
+            QColor(COLOR_SUCCESS) if m <= overall_median else QColor(COLOR_WARNING)
+            for m in seg_medians
+        ]
+
+        bar = pg.BarGraphItem(x=x, height=heights, width=0.6, brushes=brushes)
+        self._segment_plot.addItem(bar)
+
+        ref_line = pg.InfiniteLine(
+            pos=overall_median,
+            angle=0,
+            pen=pg.mkPen(COLOR_TEXT_SECONDARY, width=1, style=Qt.PenStyle.DashLine),
+        )
+        self._segment_plot.addItem(ref_line)
+
+        axis = self._segment_plot.getAxis("bottom")
+        axis.setTicks([[(i, lbl) for i, lbl in enumerate(seg_labels)]])
+        self._segment_plot.getViewBox().setYRange(0, max(seg_medians) * 1.15, padding=0)

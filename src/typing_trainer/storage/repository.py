@@ -801,6 +801,48 @@ class Repository:
         ).fetchall()
         return [r["reaction_time_ms"] for r in rows]
 
+    def get_per_letter_rt_stats(
+        self, letters: list[str], window: int = 400
+    ) -> dict[str, tuple[float, float, int]]:
+        """Get RT statistics for each letter over the last *window* correct keystrokes.
+
+        Returns ``{letter: (median_rt_ms, cv, count)}``.
+        Only correct keystrokes with valid ``reaction_time_ms <= 2000``
+        are included.  Letters with no data return ``(0.0, 0.0, 0)``.
+        """
+        result: dict[str, tuple[float, float, int]] = {}
+        for letter in letters:
+            rows = self.db.conn.execute(
+                """SELECT reaction_time_ms FROM keystrokes
+                   WHERE expected_char = ?
+                     AND error_type = 'correct'
+                     AND is_backspace = 0
+                     AND reaction_time_ms IS NOT NULL
+                     AND reaction_time_ms <= 2000
+                   ORDER BY id DESC
+                   LIMIT ?""",
+                (letter, window),
+            ).fetchall()
+
+            count = len(rows)
+            if count == 0:
+                result[letter] = (0.0, 0.0, 0)
+                continue
+
+            rts = [r["reaction_time_ms"] for r in rows]
+            sorted_rts = sorted(rts)
+            median = float(sorted_rts[count // 2])
+            mean = sum(rts) / count
+            if mean > 0:
+                variance = sum((v - mean) ** 2 for v in rts) / count
+                cv = variance**0.5 / mean
+            else:
+                cv = 0.0
+
+            result[letter] = (median, cv, count)
+
+        return result
+
     def get_per_letter_accuracy_series(
         self, letter: str, window: int = 200
     ) -> list[tuple[int, float]]:

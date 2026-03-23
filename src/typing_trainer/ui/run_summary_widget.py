@@ -169,6 +169,9 @@ class RunSummaryWidget(QWidget):
         speed_controls.addStretch()
         speed_layout.addLayout(speed_controls)
 
+        # Side-by-side: position-level speed chart + segment median chart
+        charts_row = QHBoxLayout()
+
         self._speed_chart = pg.PlotWidget()
         self._speed_chart.setBackground(COLOR_BG_DARK)
         self._speed_chart.showGrid(x=True, y=True, alpha=0.15)
@@ -177,8 +180,19 @@ class RunSummaryWidget(QWidget):
         self._speed_chart.getAxis("left").setTextPen(COLOR_TEXT_SECONDARY)
         self._speed_chart.getAxis("bottom").setTextPen(COLOR_TEXT_SECONDARY)
         self._speed_chart.setMinimumHeight(150)
+        charts_row.addWidget(self._speed_chart, stretch=1)
 
-        speed_layout.addWidget(self._speed_chart, stretch=1)
+        self._segment_chart = pg.PlotWidget()
+        self._segment_chart.setBackground(COLOR_BG_DARK)
+        self._segment_chart.showGrid(x=True, y=True, alpha=0.15)
+        self._segment_chart.setLabel("left", "Median RT (ms)", color=COLOR_TEXT_PRIMARY)
+        self._segment_chart.setLabel("bottom", "Segment", color=COLOR_TEXT_PRIMARY)
+        self._segment_chart.getAxis("left").setTextPen(COLOR_TEXT_SECONDARY)
+        self._segment_chart.getAxis("bottom").setTextPen(COLOR_TEXT_SECONDARY)
+        self._segment_chart.setMinimumHeight(150)
+        charts_row.addWidget(self._segment_chart, stretch=1)
+
+        speed_layout.addLayout(charts_row, stretch=1)
         self._speed_group = speed_group
         layout.addWidget(speed_group, stretch=1)
 
@@ -707,6 +721,79 @@ class RunSummaryWidget(QWidget):
         # ── Y range ──
         if y_max > 0:
             self._speed_chart.getViewBox().setYRange(0, y_max * 1.15, padding=0)
+
+        # ── Segment median chart ──
+        self._draw_segment_chart(result)
+
+    def _draw_segment_chart(self, result: RunResult) -> None:
+        """Draw median RT per 20-keystroke segment as a bar chart."""
+        self._segment_chart.clear()
+
+        _SEGMENT_SIZE = 20
+
+        # Collect valid RTs with position
+        warmup = self.config.warmup_keystrokes
+        rts_by_pos: list[int] = []
+        for ks in result.keystrokes:
+            if ks.is_backspace:
+                continue
+            if ks.position < warmup:
+                continue
+            if ks.error_type in (ErrorType.MOTOR_OVERFLOW, ErrorType.BURST_REPEAT):
+                continue
+            if ks.reaction_time_ms is None or ks.reaction_time_ms > RT_CAP_MS:
+                continue
+            rts_by_pos.append(ks.reaction_time_ms)
+
+        if len(rts_by_pos) < _SEGMENT_SIZE:
+            return
+
+        # Build segments
+        n_segments = len(rts_by_pos) // _SEGMENT_SIZE
+        seg_medians: list[float] = []
+        seg_labels: list[str] = []
+
+        for s in range(n_segments):
+            chunk = sorted(rts_by_pos[s * _SEGMENT_SIZE : (s + 1) * _SEGMENT_SIZE])
+            median = float(chunk[len(chunk) // 2])
+            seg_medians.append(median)
+            start = s * _SEGMENT_SIZE + 1
+            seg_labels.append(f"{start}")
+
+        if not seg_medians:
+            return
+
+        x = np.arange(len(seg_medians), dtype=np.float64)
+        heights = np.array(seg_medians, dtype=np.float64)
+
+        # Color bars: green if below overall median, yellow if above
+        overall_median = float(sorted(rts_by_pos)[len(rts_by_pos) // 2])
+        brushes = []
+        for m in seg_medians:
+            if m <= overall_median:
+                brushes.append(QColor(COLOR_SUCCESS))
+            else:
+                brushes.append(QColor(COLOR_WARNING))
+
+        bar = pg.BarGraphItem(x=x, height=heights, width=0.6, brushes=brushes)
+        self._segment_chart.addItem(bar)
+
+        # Overall median reference line
+        ref_line = pg.InfiniteLine(
+            pos=overall_median,
+            angle=0,
+            pen=pg.mkPen(COLOR_TEXT_SECONDARY, width=1, style=Qt.PenStyle.DashLine),
+        )
+        self._segment_chart.addItem(ref_line)
+
+        # X-axis labels
+        axis = self._segment_chart.getAxis("bottom")
+        axis.setTicks([[(i, lbl) for i, lbl in enumerate(seg_labels)]])
+
+        # Y range
+        self._segment_chart.getViewBox().setYRange(
+            0, max(seg_medians) * 1.15, padding=0
+        )
 
     def _on_rt_window_changed(self) -> None:
         """Redraw the speed chart with the new rolling window size."""

@@ -98,6 +98,7 @@ class MainWindow(QMainWindow):
         # State
         self._active_letters: dict[str, LetterStats] = {}
         self._current_session: Session | None = None
+        self._space_median_rt: float = 0.0
 
         # Session timeout timer
         self._inactivity_timer = QTimer(self)
@@ -406,6 +407,9 @@ class MainWindow(QMainWindow):
         # Run summary sections
         self._summary_widget.set_display_mode(mode)
 
+        # Session dashboard (for per-letter bar rendering)
+        self._session_dashboard.set_display_mode(mode)
+
     # ------------------------------------------------------------------
     # Profile management
     # ------------------------------------------------------------------
@@ -562,9 +566,29 @@ class MainWindow(QMainWindow):
             stats.rolling_accuracy_wide = acc_wide
             stats.rolling_keystroke_count_wide = count_wide
 
-        # Per-run state recheck — detect degradation/recovery immediately
-        # rather than waiting for session end.
-        if self.letter_mgr.recheck_all_states(self._active_letters):
+        # RT statistics for mastery evaluation
+        rt_stats = self.repo.get_per_letter_rt_stats(
+            active_letter_list, self.config.mastery_rt_window
+        )
+        space_rt_stats = self.repo.get_per_letter_rt_stats(
+            [" "], self.config.mastery_rt_window
+        )
+        self._space_median_rt = space_rt_stats.get(" ", (0.0, 0.0, 0))[0]
+
+        for letter, stats in self._active_letters.items():
+            median, cv, count = rt_stats.get(letter, (0.0, 0.0, 0))
+            stats.median_rt = median
+            stats.rt_cv = cv
+            stats.rt_keystroke_count = count
+            stats.rt_factor = (
+                median / self._space_median_rt if self._space_median_rt > 0 else 0.0
+            )
+
+        # Per-run state recheck — detect degradation/recovery and
+        # RT-based mastery transitions.
+        if self.letter_mgr.recheck_all_states(
+            self._active_letters, self._space_median_rt
+        ):
             self.repo.save_all_letter_states(self._active_letters)
 
         # Letter overview (uses rolling_error_rate_long)
@@ -592,6 +616,7 @@ class MainWindow(QMainWindow):
             keystroke_counts,
             run_counts,
             weight_shares,
+            space_median_rt=self._space_median_rt,
         )
 
         # Config widget letter display
@@ -671,7 +696,9 @@ class MainWindow(QMainWindow):
                 self.config.advancement_accuracy_window,
                 learn_keys_only=True,
             )
-        self._session_dashboard.update_advancement(advancement, error_window)
+        self._session_dashboard.update_advancement(
+            advancement, error_window, space_median_rt=self._space_median_rt
+        )
 
         # Review status
         review_statuses = self.spaced_rep.get_review_status(self._active_letters)
