@@ -378,28 +378,28 @@ class TypingWidget(QWidget):
         QTimer.singleShot(0, self._apply_vertical_centering)
 
     def _apply_vertical_centering(self) -> None:
-        """Set the first block's top margin to vertically center text."""
+        """Center text vertically using viewport margins."""
         doc = self._text_display.document()
-        viewport = self._text_display.viewport()
-        if doc is None or viewport is None:
+        if doc is None:
             return
 
-        # Reset top margin to 0, measure natural doc height, then compute
-        cursor = self._text_display.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.Start)
-        block_fmt = cursor.blockFormat()
-        block_fmt.setTopMargin(0)
-        cursor.setBlockFormat(block_fmt)
+        # Reset viewport margins to measure natural doc height
+        self._text_display.setViewportMargins(0, 0, 0, 0)
+
+        viewport = self._text_display.viewport()
+        if viewport is None:
+            return
 
         doc.adjustSize()
         doc_height = doc.size().height()
-        viewport_height = viewport.height()
-        # Account for CSS padding (20px top + 20px bottom)
-        usable_height = viewport_height - 40
-        top_margin = max(0.0, (usable_height - doc_height) / 2)
+        # Restore document width — adjustSize() shrinks it to content width,
+        # which breaks AlignCenter horizontal centering.
+        doc.setTextWidth(viewport.width())
 
-        block_fmt.setTopMargin(top_margin)
-        cursor.setBlockFormat(block_fmt)
+        widget_height = self._text_display.height()
+
+        top_margin = max(0, int((widget_height - doc_height) / 2))
+        self._text_display.setViewportMargins(0, top_margin, 0, 0)
 
     def resizeEvent(self, event: QResizeEvent | None) -> None:  # type: ignore[override]
         """Re-center text vertically when the widget is resized."""
