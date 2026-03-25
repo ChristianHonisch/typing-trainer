@@ -26,6 +26,14 @@ class Config:
     """Rolling window size (keystrokes per letter) for computing per-letter accuracy."""
 
     # --- Fail thresholds ---
+    fail_threshold_enabled: bool = False
+    """Whether runs are aborted when accuracy drops below the fail threshold.
+
+    When ``False``, runs always continue to completion regardless of
+    accuracy.  The fail threshold values below are retained but have
+    no effect.
+    """
+
     fail_threshold_min_errors: int = 5
     """Minimum cognitive errors before fail threshold can abort a run.
 
@@ -33,6 +41,8 @@ class Config:
     On the Nth error, if accuracy is below the fail threshold, the run
     is aborted.  This prevents accidental double-key presses or early
     fumbles from immediately ending a run.
+
+    Only applies when ``fail_threshold_enabled`` is ``True``.
     """
 
     fail_threshold_relearning: float = 0.90
@@ -46,6 +56,16 @@ class Config:
 
     fail_threshold_introducing_s2: float = 0.80
     """Fail threshold for second session with a new letter."""
+
+    # --- Capitalization ---
+    require_capitalization: bool = True
+    """Whether uppercase letters in target text must be typed with Shift.
+
+    When ``True``, typing ``h`` when ``H`` is expected is a cognitive
+    error.  When ``False``, case is ignored for correctness checking.
+    Only affects Build Speed and Smooth Pairs (Learn Keys / Fix Keys
+    generate lowercase-only random strings).
+    """
 
     # --- Run defaults ---
     run_length_default_relearning: int = 60

@@ -462,16 +462,21 @@ class LetterManager:
                 return stats.state
 
     def _is_stable(self, stats: LetterStats) -> bool:
-        """Check if a letter qualifies as stable.
+        """Check if a consolidating letter qualifies as stable.
 
-        Stable = accuracy >= threshold across last 3 sessions.
+        Stable = rolling accuracy >= threshold over a full keystroke
+        window.  This is purely volume-based: the letter must have at
+        least ``advancement_accuracy_window`` keystrokes in its rolling
+        window, all meeting the accuracy criterion.
+
+        Previous implementation checked ``accuracy_history`` (per-session
+        accuracy over the last 3 sessions), which was sensitive to
+        session size variability.
         """
-        n = 3  # Fixed: letter state uses 3 sessions of history
-        if len(stats.accuracy_history) < n:
-            return False
-        return all(
-            acc >= self.config.advancement_accuracy
-            for acc in stats.accuracy_history[:n]
+        error_threshold = 1.0 - self.config.advancement_accuracy
+        return (
+            stats.rolling_keystroke_count >= self.config.advancement_accuracy_window
+            and stats.rolling_error_rate <= error_threshold
         )
 
     def _is_degraded(self, stats: LetterStats) -> bool:

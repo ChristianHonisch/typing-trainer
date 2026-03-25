@@ -97,9 +97,11 @@ class ErrorClassifier:
         Returns:
             ClassificationResult with the error type and same-key info.
         """
+        # Case-insensitive same-key check so that 'H' followed by 'h'
+        # (or vice versa) is recognized as the same physical key.
         is_same_key = (
             self._prev_actual_char is not None
-            and actual_char == self._prev_actual_char
+            and actual_char.lower() == self._prev_actual_char.lower()
         )
         same_key_interval_ms: int | None = None
 
@@ -151,7 +153,10 @@ class ErrorClassifier:
 
         # --- Swap detection ---
         is_swap = False
-        if base_error_type == ErrorType.COGNITIVE_ERROR and self._prev_was_cognitive_error:
+        if (
+            base_error_type == ErrorType.COGNITIVE_ERROR
+            and self._prev_was_cognitive_error
+        ):
             # Check if expected/actual are transposed with previous keystroke
             if (
                 self._prev_expected_for_swap is not None

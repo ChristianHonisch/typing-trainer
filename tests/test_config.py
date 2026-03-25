@@ -28,6 +28,8 @@ class TestConfigDefaults:
         assert config.degraded_recovery_margin == 0.8
         assert config.max_letter_share == 0.35
         assert config.warmup_keystrokes == 3
+        assert config.require_capitalization is True
+        assert config.fail_threshold_enabled is False
         assert config.language == "de"
 
 

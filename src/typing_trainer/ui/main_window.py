@@ -88,7 +88,7 @@ class MainWindow(QMainWindow):
         # Core components
         self.db = Database(config.db_path)
         self.db.initialize()
-        self.repo = Repository(self.db)
+        self.repo = Repository(self.db, warmup=config.warmup_keystrokes)
         self.engine = TypingEngine(config)
         self.text_gen = TextGenerator(config, self.keyboard_layout)
         self.letter_mgr = LetterManager(config, self.keyboard_layout)
@@ -455,7 +455,7 @@ class MainWindow(QMainWindow):
         self.keyboard_layout = load_keyboard(new_config.keyboard_layout)
         self.db = Database(new_config.db_path)
         self.db.initialize()
-        self.repo = Repository(self.db)
+        self.repo = Repository(self.db, warmup=new_config.warmup_keystrokes)
         self.engine = TypingEngine(new_config)
         self.text_gen = TextGenerator(new_config, self.keyboard_layout)
         self.letter_mgr = LetterManager(new_config, self.keyboard_layout)

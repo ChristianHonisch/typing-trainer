@@ -295,8 +295,21 @@ class TypingWidget(QWidget):
                     # Correct (no first_input record means it was correct)
                     fmt.setForeground(QColor(COLOR_SUCCESS))
             else:
-                # Upcoming (including cursor position)
-                if char in self._highlight_letters:
+                # Upcoming (including cursor position).
+                # Positions the user already typed but backspaced over
+                # retain their error/correct state so the user can see
+                # what they previously entered.
+                if i in first_inputs:
+                    actual, error_type = first_inputs[i]
+                    if error_type == ErrorType.COGNITIVE_ERROR:
+                        fmt.setForeground(QColor(COLOR_ERROR))
+                        fmt.setBackground(QColor(COLOR_ERROR_BG))
+                        char = actual
+                        if actual == " ":
+                            char = "\u00a0"
+                    else:
+                        fmt.setForeground(QColor(COLOR_SUCCESS))
+                elif char in self._highlight_letters:
                     # Weak letter: pale yellow for attention
                     fmt.setForeground(QColor(COLOR_HIGHLIGHT_WEAK))
                 else:

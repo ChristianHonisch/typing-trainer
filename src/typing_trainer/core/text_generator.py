@@ -411,7 +411,12 @@ class TextGenerator:
         ]
 
     def _load_corpus(self, language: str) -> list[str]:
-        """Load word list from corpus file. Cached after first load."""
+        """Load word list from corpus file.  Cached after first load.
+
+        Words are returned with their original case (e.g. German nouns
+        are capitalized).  Callers that need case-insensitive filtering
+        should lowercase individually.
+        """
         if language in self._word_cache:
             return self._word_cache[language]
 
@@ -424,9 +429,7 @@ class TextGenerator:
 
         with open(corpus_file, "r", encoding="utf-8") as f:
             words = [
-                line.strip().lower()
-                for line in f
-                if line.strip() and not line.startswith("#")
+                line.strip() for line in f if line.strip() and not line.startswith("#")
             ]
 
         self._word_cache[language] = words

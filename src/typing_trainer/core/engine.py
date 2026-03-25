@@ -169,6 +169,15 @@ class TypingEngine:
             return None
         expected_char = self.state.target_text[self.state.cursor_position]
 
+        # Case normalization: when require_capitalization is disabled,
+        # normalize the actual char to match the expected case so that
+        # 'h' and 'H' are treated as the same key for scoring purposes.
+        if (
+            not self.config.require_capitalization
+            and actual_char.lower() == expected_char.lower()
+        ):
+            actual_char = expected_char
+
         # Compute reaction time
         reaction_time_ms: int | None = None
         if self.state.prev_timestamp_ms is not None:
@@ -218,28 +227,30 @@ class TypingEngine:
         if classification.is_swap:
             self.state.swap_count += 1
 
-        # Track first input at this position
+        # Track input at this position.
+        # Always update first_inputs so the display reflects the latest
+        # attempt after backspace + retype.  Scoring (accuracy, per-letter
+        # stats) is still first-input-only per the SPEC.
         pos = self.state.cursor_position
         is_first_input = pos not in self.state.first_inputs
         is_warmup = pos < self.config.warmup_keystrokes
 
-        if is_first_input:
-            self.state.first_inputs[pos] = (actual_char, classification.error_type)
+        self.state.first_inputs[pos] = (actual_char, classification.error_type)
 
-            if not is_warmup:
-                # Warmup keystrokes are logged but excluded from accuracy,
-                # per-letter stats, and the fail threshold.  Position analysis
-                # shows elevated error rates at run start (~3.5%) compared to
-                # the productive zone (~1.7%).
-                self.state.total_scored_keystrokes += 1
+        if is_first_input and not is_warmup:
+            # Warmup keystrokes are logged but excluded from accuracy,
+            # per-letter stats, and the fail threshold.  Position analysis
+            # shows elevated error rates at run start (~3.5%) compared to
+            # the productive zone (~1.7%).
+            self.state.total_scored_keystrokes += 1
 
-                if classification.error_type == ErrorType.COGNITIVE_ERROR:
-                    self.state.cognitive_errors += 1
+            if classification.error_type == ErrorType.COGNITIVE_ERROR:
+                self.state.cognitive_errors += 1
 
-                # Update per-letter stats (based on first input only)
-                self._update_per_letter(
-                    expected_char, classification.error_type, reaction_time_ms
-                )
+            # Update per-letter stats (based on first input only)
+            self._update_per_letter(
+                expected_char, classification.error_type, reaction_time_ms
+            )
 
         # Create keystroke event
         event = KeystrokeEvent(
@@ -260,7 +271,8 @@ class TypingEngine:
 
         # Check fail threshold (only after accumulating enough errors)
         if (
-            is_first_input
+            self.config.fail_threshold_enabled
+            and is_first_input
             and self.state.cognitive_errors >= self.config.fail_threshold_min_errors
             and self.state.accuracy < self.state.fail_threshold
         ):

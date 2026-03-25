@@ -14,6 +14,7 @@ from pathlib import Path
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QGroupBox,
@@ -88,6 +89,7 @@ class SettingsWidget(QWidget):
         self._config = config
         self._profile_name = profile_name
         self._spinboxes: dict[str, QSpinBox | QDoubleSpinBox] = {}
+        self._checkboxes: dict[str, QCheckBox] = {}
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -323,6 +325,15 @@ class SettingsWidget(QWidget):
         )
         self._add_int_row(
             adv_layout, "Minimum run length", "run_length_minimum", 10, 200, step=10
+        )
+
+        # Capitalization
+        adv_layout.addWidget(self._make_section_label("Capitalization"))
+        self._add_bool_row(
+            adv_layout,
+            "Require capitalization",
+            "require_capitalization",
+            tip="Typing 'h' when 'H' is expected counts as an error",
         )
 
         # Speed Training
@@ -700,6 +711,38 @@ class SettingsWidget(QWidget):
 
         parent_layout.addLayout(row)
 
+    def _add_bool_row(
+        self,
+        parent_layout: QVBoxLayout,
+        label: str,
+        field: str,
+        tip: str = "",
+    ) -> None:
+        """Add a checkbox row for a boolean config field."""
+        row = QHBoxLayout()
+        cb = QCheckBox(label)
+        cb.setFont(app_font(10))
+        cb.setChecked(getattr(self._config, field))
+        if tip:
+            cb.setToolTip(tip)
+
+        def handler(state: int) -> None:
+            setattr(self._config, field, state != 0)
+            self.config_value_changed.emit()
+
+        cb.stateChanged.connect(handler)
+        row.addWidget(cb)
+        row.addStretch()
+
+        default_val = getattr(_DEFAULTS, field)
+        reset = self._make_reset_btn()
+        reset.clicked.connect(lambda _=None, c=cb, d=default_val: c.setChecked(d))
+        row.addWidget(reset)
+
+        self._checkboxes[field] = cb
+
+        parent_layout.addLayout(row)
+
     # ------------------------------------------------------------------
     # Profile management
     # ------------------------------------------------------------------
@@ -740,13 +783,17 @@ class SettingsWidget(QWidget):
         )
 
     def update_config_display(self, config: Config) -> None:
-        """Refresh all spinboxes to reflect a new config (after profile switch)."""
+        """Refresh all widgets to reflect a new config (after profile switch)."""
         self._config = config
         for field_name, spin in self._spinboxes.items():
             spin.blockSignals(True)
             val = getattr(config, field_name)
             spin.setValue(val)
             spin.blockSignals(False)
+        for field_name, cb in self._checkboxes.items():
+            cb.blockSignals(True)
+            cb.setChecked(getattr(config, field_name))
+            cb.blockSignals(False)
         # Language combo
         idx = self._lang_combo.findData(config.language)
         if idx >= 0:

@@ -67,8 +67,19 @@ class TestBasicTyping:
 
 
 class TestFailThreshold:
+    """Tests for fail threshold behavior (requires fail_threshold_enabled=True)."""
+
+    def _make_engine(self) -> TypingEngine:
+        """Create an engine with fail threshold enabled for testing."""
+        config = Config(
+            motor_overflow_window_ms=80,
+            warmup_keystrokes=0,
+            fail_threshold_enabled=True,
+        )
+        return TypingEngine(config)
+
     def test_run_fails_when_accuracy_below_threshold(self):
-        engine = make_engine(fail_threshold=0.90)
+        engine = self._make_engine()
         text = "abcdefghijklmnopqrstuvwxyz"
         engine.start_run(text, fail_threshold=0.90)
 
@@ -89,7 +100,7 @@ class TestFailThreshold:
         assert engine.state.is_finished
 
     def test_run_does_not_fail_below_min_errors(self):
-        engine = make_engine()
+        engine = self._make_engine()
         text = "abcdefghijklmnopqrst"  # 20 chars
         engine.start_run(text, fail_threshold=0.90)
 
@@ -106,7 +117,7 @@ class TestFailThreshold:
 
     def test_no_fail_when_accuracy_above_threshold_at_min_errors(self):
         """5 errors but accuracy still >= threshold -> no fail."""
-        engine = make_engine()
+        engine = self._make_engine()
         text = "a" * 100
         engine.start_run(text, fail_threshold=0.90)
 
@@ -122,7 +133,7 @@ class TestFailThreshold:
 
     def test_progressive_fail_threshold(self):
         """Test that a lower fail threshold (70%) allows more errors."""
-        engine = make_engine()
+        engine = self._make_engine()
         text = "a" * 20
         engine.start_run(text, fail_threshold=0.70)
 
@@ -139,7 +150,7 @@ class TestFailThreshold:
 
     def test_low_threshold_tolerates_more_errors(self):
         """With a 70% threshold and many correct, 5 errors still pass."""
-        engine = make_engine()
+        engine = self._make_engine()
         text = "a" * 30
         engine.start_run(text, fail_threshold=0.70)
 
@@ -153,6 +164,22 @@ class TestFailThreshold:
         assert engine.state.cognitive_errors == 5
         assert not engine.state.is_failed
         assert engine.state.accuracy == 15 / 20
+
+    def test_disabled_by_default(self):
+        """With fail_threshold_enabled=False (default), runs never abort."""
+        engine = make_engine()
+        text = "abcdefghijklmnopqrstuvwxyz"
+        engine.start_run(text, fail_threshold=0.90)
+
+        # 5 correct + 5 errors = 50% accuracy, well below 90%
+        for i, char in enumerate(text[:5]):
+            engine.process_keystroke(char, 1000 + i * 100)
+        for i in range(5):
+            engine.process_keystroke(str(i), 1500 + i * 100)
+
+        assert engine.state.cognitive_errors == 5
+        assert not engine.state.is_failed
+        assert not engine.state.is_finished
 
 
 class TestMotorOverflow:
@@ -226,9 +253,57 @@ class TestBackspace:
         engine.process_keystroke("b", 1400)  # retype pos 1 (already scored)
         engine.process_keystroke("c", 1600)  # correct
 
+        # Scoring unchanged — accuracy reflects the original error
         assert engine.state.total_scored_keystrokes == 3
         assert engine.state.cognitive_errors == 1
         assert engine.state.accuracy == 2 / 3
+
+    def test_first_inputs_updated_on_retype(self):
+        """After backspace + retype, first_inputs reflects the correction."""
+        engine = make_engine()
+        engine.start_run("abc", mode=RunMode.SPEED)
+
+        engine.process_keystroke("a", 1000)  # correct
+        engine.process_keystroke("x", 1200)  # error at pos 1
+
+        # Before backspace: first_inputs[1] has the error
+        actual, error_type = engine.state.first_inputs[1]
+        assert actual == "x"
+        assert error_type == ErrorType.COGNITIVE_ERROR
+
+        engine.process_keystroke("\b", 1300)  # backspace to pos 1
+        engine.process_keystroke("b", 1400)  # retype pos 1 correctly
+
+        # After correction: first_inputs[1] reflects the new input
+        actual, error_type = engine.state.first_inputs[1]
+        assert actual == "b"
+        assert error_type == ErrorType.CORRECT
+
+        # But scoring is still based on the original first input
+        assert engine.state.cognitive_errors == 1
+        assert engine.state.total_scored_keystrokes == 2  # pos 0 and 1
+
+    def test_backspace_retype_multiple_corrections(self):
+        """Multiple backspace corrections all update first_inputs."""
+        engine = make_engine()
+        engine.start_run("abcd", mode=RunMode.SPEED)
+
+        engine.process_keystroke("a", 1000)
+        engine.process_keystroke("x", 1200)  # error at pos 1
+        engine.process_keystroke("y", 1400)  # error at pos 2
+        engine.process_keystroke("\b", 1500)  # back to pos 2
+        engine.process_keystroke("\b", 1600)  # back to pos 1
+        engine.process_keystroke("b", 1700)  # correct pos 1
+        engine.process_keystroke("c", 1800)  # correct pos 2
+        engine.process_keystroke("d", 1900)  # correct pos 3
+
+        # Both corrections reflected in first_inputs
+        assert engine.state.first_inputs[1] == ("b", ErrorType.CORRECT)
+        assert engine.state.first_inputs[2] == ("c", ErrorType.CORRECT)
+
+        # Scoring: 2 errors from original first inputs at pos 1, 2
+        assert engine.state.cognitive_errors == 2
+        assert engine.state.total_scored_keystrokes == 4
 
 
 class TestPerLetterStats:
@@ -307,7 +382,12 @@ class TestFinishRun:
         assert len(result.keystrokes) == 2
 
     def test_finish_run_on_failure(self):
-        engine = make_engine()
+        config = Config(
+            motor_overflow_window_ms=80,
+            warmup_keystrokes=0,
+            fail_threshold_enabled=True,
+        )
+        engine = TypingEngine(config)
         text = "a" * 30
         engine.start_run(text, fail_threshold=0.90)
 
@@ -353,7 +433,9 @@ class TestDeferredStartTime:
 class TestBurstRepeat:
     def test_burst_repeat_excluded_from_accuracy(self):
         """Burst repeat presses don't count toward accuracy or total keystrokes."""
-        config = Config(motor_overflow_window_ms=80, burst_max_interval_ms=500, warmup_keystrokes=0)
+        config = Config(
+            motor_overflow_window_ms=80, burst_max_interval_ms=500, warmup_keystrokes=0
+        )
         engine = TypingEngine(config)
         # Target: "abcde", user types correct 'a', then holds 'n'
         engine.start_run("abcde")
@@ -373,7 +455,9 @@ class TestBurstRepeat:
 
     def test_burst_repeat_does_not_advance_cursor(self):
         """Burst repeat presses stay at the same position (like motor overflow)."""
-        config = Config(motor_overflow_window_ms=80, burst_max_interval_ms=500, warmup_keystrokes=0)
+        config = Config(
+            motor_overflow_window_ms=80, burst_max_interval_ms=500, warmup_keystrokes=0
+        )
         engine = TypingEngine(config)
         engine.start_run("abcde")
 
@@ -388,7 +472,9 @@ class TestBurstRepeat:
 
     def test_burst_count_in_run_result(self):
         """RunResult includes burst_repeat_count."""
-        config = Config(motor_overflow_window_ms=80, burst_max_interval_ms=500, warmup_keystrokes=0)
+        config = Config(
+            motor_overflow_window_ms=80, burst_max_interval_ms=500, warmup_keystrokes=0
+        )
         engine = TypingEngine(config)
         engine.start_run("abc")
 
@@ -475,7 +561,11 @@ class TestWarmup:
 
     def test_warmup_does_not_prevent_fail_threshold(self):
         """Errors after warmup should still trigger the fail threshold."""
-        config = Config(warmup_keystrokes=2, fail_threshold_min_errors=5)
+        config = Config(
+            warmup_keystrokes=2,
+            fail_threshold_min_errors=5,
+            fail_threshold_enabled=True,
+        )
         engine = TypingEngine(config)
         text = "a" * 20
         engine.start_run(text, fail_threshold=0.90)
@@ -519,3 +609,58 @@ class TestWarmup:
         result = engine.finish_run()
         assert len(result.keystrokes) == 3  # all 3 logged
         assert result.total_keystrokes == 1  # only 1 scored
+
+
+class TestCapitalization:
+    """Tests for require_capitalization config option."""
+
+    def test_require_capitalization_enabled(self):
+        """With require_capitalization=True, case must match."""
+        config = Config(warmup_keystrokes=0, require_capitalization=True)
+        engine = TypingEngine(config)
+        engine.start_run("Haus", mode=RunMode.SPEED)
+
+        engine.process_keystroke("h", 1000)  # wrong: lowercase when uppercase expected
+        assert engine.state.cognitive_errors == 1
+
+    def test_require_capitalization_disabled(self):
+        """With require_capitalization=False, case is ignored."""
+        config = Config(warmup_keystrokes=0, require_capitalization=False)
+        engine = TypingEngine(config)
+        engine.start_run("Haus", mode=RunMode.SPEED)
+
+        engine.process_keystroke("h", 1000)  # accepted: case ignored
+        assert engine.state.cognitive_errors == 0
+
+        engine.process_keystroke("a", 1200)
+        engine.process_keystroke("u", 1400)
+        engine.process_keystroke("s", 1600)
+
+        assert engine.state.total_scored_keystrokes == 4
+        assert engine.state.cognitive_errors == 0
+        assert engine.state.accuracy == 1.0
+
+    def test_capitalization_per_letter_normalizes_to_lowercase(self):
+        """Per-letter stats track lowercase regardless of target case."""
+        config = Config(warmup_keystrokes=0, require_capitalization=True)
+        engine = TypingEngine(config)
+        engine.start_run("Haus", mode=RunMode.SPEED)
+
+        engine.process_keystroke("H", 1000)
+        engine.process_keystroke("a", 1200)
+        engine.process_keystroke("u", 1400)
+        engine.process_keystroke("s", 1600)
+
+        # Per-letter stats use lowercase keys
+        assert "h" in engine.state.per_letter
+        assert "H" not in engine.state.per_letter
+        assert engine.state.per_letter["h"].total_attempts == 1
+
+    def test_wrong_letter_still_error_when_capitalization_disabled(self):
+        """Case is ignored but wrong base letter is still an error."""
+        config = Config(warmup_keystrokes=0, require_capitalization=False)
+        engine = TypingEngine(config)
+        engine.start_run("Haus", mode=RunMode.SPEED)
+
+        engine.process_keystroke("x", 1000)  # wrong letter entirely
+        assert engine.state.cognitive_errors == 1

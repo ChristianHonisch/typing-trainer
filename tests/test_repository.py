@@ -1877,12 +1877,12 @@ class TestHistoricalPositionRts:
         repo = make_repo(tmp_path)
         sid = self._make_session(repo)
         rid = self._make_run(repo, sid, target_length=40)
-        # Positions 0, 1, 2 are warmup (default warmup=3)
+        # Positions 0, 1, 2 are warmup (warmup=3)
         self._insert_keystroke(repo, rid, 0, "e", "correct", 100)
         self._insert_keystroke(repo, rid, 1, "e", "correct", 100)
         self._insert_keystroke(repo, rid, 2, "e", "correct", 100)
         self._insert_keystroke(repo, rid, 3, "e", "correct", 150)
-        result = repo.get_historical_position_rts(min_target_length=40)
+        result = repo.get_historical_position_rts(min_target_length=40, warmup=3)
         assert len(result) == 1
         assert result[0][0] == 3
 
@@ -2752,3 +2752,291 @@ class TestErrorWindowLearnKeysOnly:
         assert len(result_lk["a"]) == 4
         # 3 correct then 1 error (chronological)
         assert result_lk["a"] == [False, False, False, True]
+
+
+def _make_warmup_repo(tmp_path, warmup: int = 3) -> Repository:
+    """Create a repository with warmup filtering enabled."""
+    db = Database(str(tmp_path / "warmup_test.db"))
+    db.initialize()
+    return Repository(db, warmup=warmup)
+
+
+class TestWarmupFiltering:
+    """Tests that Repository warmup parameter excludes early-position keystrokes."""
+
+    def _make_session(self, repo: Repository) -> int:
+        """Create a session and return its ID."""
+        session = Session(start_time=datetime.now(), language="de", layout="qwertz")
+        return repo.create_session(session)
+
+    def _make_run(self, repo: Repository, session_id: int) -> int:
+        """Create a minimal run and return its ID."""
+        run = RunResult(
+            start_time=datetime.now(),
+            target_text="test text",
+            target_length=20,
+            total_keystrokes=20,
+        )
+        return repo.save_run(run, session_id)
+
+    def _insert_keystroke(
+        self,
+        repo: Repository,
+        run_id: int,
+        position: int,
+        expected: str,
+        error_type: str,
+        rt: int | None = 100,
+        actual: str | None = None,
+    ) -> None:
+        """Insert a single keystroke at a specific position."""
+        if actual is None:
+            actual = expected if error_type == "correct" else "x"
+        repo.db.conn.execute(
+            """INSERT INTO keystrokes
+               (run_id, position, timestamp_ms, expected_char,
+                actual_char, error_type, reaction_time_ms, is_backspace)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                run_id,
+                position,
+                1000 + position * 100,
+                expected,
+                actual,
+                error_type,
+                rt,
+                0,
+            ),
+        )
+        repo.db.conn.commit()
+
+    def _insert_warmup_and_scored(
+        self,
+        repo: Repository,
+        run_id: int,
+        letter: str = "e",
+        warmup_error: bool = True,
+    ) -> None:
+        """Insert 3 warmup + 2 scored keystrokes.
+
+        If ``warmup_error`` is True, position 1 is an error (in warmup zone).
+        Scored positions 3 and 4 are always correct.
+        """
+        self._insert_keystroke(repo, run_id, 0, letter, "correct")
+        if warmup_error:
+            self._insert_keystroke(repo, run_id, 1, letter, "cognitive_error")
+        else:
+            self._insert_keystroke(repo, run_id, 1, letter, "correct")
+        self._insert_keystroke(repo, run_id, 2, letter, "correct")
+        # Scored keystrokes
+        self._insert_keystroke(repo, run_id, 3, letter, "correct")
+        self._insert_keystroke(repo, run_id, 4, letter, "correct")
+
+    def test_rolling_accuracy_excludes_warmup(self, tmp_path):
+        """Warmup error at position 1 should not affect rolling accuracy."""
+        repo = _make_warmup_repo(tmp_path)
+        sid = self._make_session(repo)
+        rid = self._make_run(repo, sid)
+        self._insert_warmup_and_scored(repo, rid, warmup_error=True)
+
+        result = repo.get_per_letter_rolling_accuracy(["e"], window=100)
+        acc, count = result["e"]
+        assert count == 2  # only positions 3, 4
+        assert acc == 1.0  # both scored are correct
+
+    def test_rolling_accuracy_without_warmup_includes_all(self, tmp_path):
+        """With warmup=0, the warmup error IS counted."""
+        repo = make_repo(tmp_path)
+        sid = self._make_session(repo)
+        rid = self._make_run(repo, sid)
+        self._insert_warmup_and_scored(repo, rid, warmup_error=True)
+
+        result = repo.get_per_letter_rolling_accuracy(["e"], window=100)
+        acc, count = result["e"]
+        assert count == 5  # all positions
+        assert abs(acc - 0.8) < 0.01  # 4/5 correct
+
+    def test_error_rates_excludes_warmup(self, tmp_path):
+        """get_per_letter_error_rates should skip warmup positions."""
+        repo = _make_warmup_repo(tmp_path)
+        sid = self._make_session(repo)
+        rid = self._make_run(repo, sid)
+        self._insert_warmup_and_scored(repo, rid, warmup_error=True)
+
+        result = repo.get_per_letter_error_rates()
+        errors, total, rate = result["e"]
+        assert total == 2  # only positions 3, 4
+        assert errors == 0
+        assert rate == 0.0
+
+    def test_error_window_excludes_warmup(self, tmp_path):
+        """get_per_letter_error_window should skip warmup positions."""
+        repo = _make_warmup_repo(tmp_path)
+        sid = self._make_session(repo)
+        rid = self._make_run(repo, sid)
+        self._insert_warmup_and_scored(repo, rid, warmup_error=True)
+
+        result = repo.get_per_letter_error_window(["e"], window=100)
+        assert result["e"] == [False, False]  # only scored (both correct)
+
+    def test_accuracy_series_excludes_warmup(self, tmp_path):
+        """get_per_letter_accuracy_series should skip warmup positions."""
+        repo = _make_warmup_repo(tmp_path)
+        sid = self._make_session(repo)
+        rid = self._make_run(repo, sid)
+        self._insert_warmup_and_scored(repo, rid, warmup_error=True)
+
+        result = repo.get_per_letter_accuracy_series("e", window=100)
+        assert len(result) == 1
+        _run_id, acc = result[0]
+        assert acc == 1.0  # warmup error excluded
+
+    def test_keystroke_errors_excludes_warmup(self, tmp_path):
+        """get_per_letter_keystroke_errors should skip warmup positions."""
+        repo = _make_warmup_repo(tmp_path)
+        sid = self._make_session(repo)
+        rid = self._make_run(repo, sid)
+        self._insert_warmup_and_scored(repo, rid, warmup_error=True)
+
+        result = repo.get_per_letter_keystroke_errors("e")
+        assert result == [False, False]  # only scored positions
+
+    def test_keystroke_rts_excludes_warmup(self, tmp_path):
+        """get_per_letter_keystroke_rts should skip warmup positions."""
+        repo = _make_warmup_repo(tmp_path)
+        sid = self._make_session(repo)
+        rid = self._make_run(repo, sid)
+        # Warmup position with distinct RT
+        self._insert_keystroke(
+            repo, run_id=rid, position=0, expected="e", error_type="correct", rt=999
+        )
+        # Scored position
+        self._insert_keystroke(
+            repo, run_id=rid, position=3, expected="e", error_type="correct", rt=200
+        )
+
+        result = repo.get_per_letter_keystroke_rts("e")
+        assert result == [200]  # warmup RT excluded
+
+    def test_rt_stats_excludes_warmup(self, tmp_path):
+        """get_per_letter_rt_stats should skip warmup positions."""
+        repo = _make_warmup_repo(tmp_path)
+        sid = self._make_session(repo)
+        rid = self._make_run(repo, sid)
+        # Warmup: very slow
+        self._insert_keystroke(repo, rid, 0, "e", "correct", rt=1500)
+        self._insert_keystroke(repo, rid, 1, "e", "correct", rt=1500)
+        self._insert_keystroke(repo, rid, 2, "e", "correct", rt=1500)
+        # Scored: fast
+        self._insert_keystroke(repo, rid, 3, "e", "correct", rt=200)
+        self._insert_keystroke(repo, rid, 4, "e", "correct", rt=300)
+
+        result = repo.get_per_letter_rt_stats(["e"], window=100)
+        median, _cv, count = result["e"]
+        assert count == 2  # only scored
+        assert median in (200.0, 300.0)  # not 1500
+
+    def test_rt_series_excludes_warmup(self, tmp_path):
+        """get_per_letter_rt_series should skip warmup positions."""
+        repo = _make_warmup_repo(tmp_path)
+        sid = self._make_session(repo)
+        rid = self._make_run(repo, sid)
+        self._insert_keystroke(repo, rid, 0, "e", "correct", rt=999)
+        self._insert_keystroke(repo, rid, 3, "e", "correct", rt=200)
+
+        result = repo.get_per_letter_rt_series("e")
+        assert len(result) == 1
+        _run_id, rts = result[0]
+        assert rts == [200]
+
+    def test_confusion_pairs_excludes_warmup(self, tmp_path):
+        """get_confusion_pairs should skip warmup positions."""
+        repo = _make_warmup_repo(tmp_path)
+        sid = self._make_session(repo)
+        rid = self._make_run(repo, sid)
+        # Warmup error at position 1
+        self._insert_keystroke(repo, rid, 1, "e", "cognitive_error", actual="r")
+        # Scored positions: all correct
+        self._insert_keystroke(repo, rid, 3, "e", "correct")
+        self._insert_keystroke(repo, rid, 4, "e", "correct")
+
+        result = repo.get_confusion_pairs()
+        assert result == []  # warmup error excluded
+
+    def test_error_rate_by_position_excludes_warmup(self, tmp_path):
+        """get_error_rate_by_position should skip warmup positions."""
+        repo = _make_warmup_repo(tmp_path)
+        sid = self._make_session(repo)
+        rid = self._make_run(repo, sid)
+        # Error at warmup position 0
+        self._insert_keystroke(repo, rid, 0, "e", "cognitive_error")
+        # Correct at scored positions
+        self._insert_keystroke(repo, rid, 3, "e", "correct")
+        self._insert_keystroke(repo, rid, 4, "e", "correct")
+
+        result = repo.get_error_rate_by_position(bucket_size=5)
+        # Only bucket starting at 0 (positions 3,4) should exist
+        assert len(result) == 1
+        bucket_start, errors, total = result[0]
+        assert bucket_start == 0
+        assert errors == 0  # warmup error excluded
+        assert total == 2
+
+    def test_run_counts_excludes_warmup(self, tmp_path):
+        """get_per_letter_run_counts should skip warmup-only letters."""
+        repo = _make_warmup_repo(tmp_path)
+        sid = self._make_session(repo)
+        rid = self._make_run(repo, sid)
+        # Letter 'z' only appears at warmup position
+        self._insert_keystroke(repo, rid, 0, "z", "correct")
+        # Letter 'e' appears at scored position
+        self._insert_keystroke(repo, rid, 3, "e", "correct")
+
+        result = repo.get_per_letter_run_counts()
+        assert "z" not in result  # only in warmup
+        assert result["e"] == 1
+
+    def test_occurrence_series_excludes_warmup(self, tmp_path):
+        """get_per_letter_occurrence_series should skip warmup positions."""
+        repo = _make_warmup_repo(tmp_path)
+        sid = self._make_session(repo)
+        rid = self._make_run(repo, sid)
+        # Warmup: letter 'z'
+        self._insert_keystroke(repo, rid, 0, "z", "correct")
+        # Scored: letter 'e'
+        self._insert_keystroke(repo, rid, 3, "e", "correct")
+
+        result = repo.get_per_letter_occurrence_series()
+        assert len(result) == 1
+        _run_id, pcts = result[0]
+        assert "z" not in pcts  # warmup-only letter excluded
+        assert pcts["e"] == 100.0
+
+    def test_error_timeline_excludes_warmup(self, tmp_path):
+        """get_error_timeline should skip warmup-position errors."""
+        repo = _make_warmup_repo(tmp_path)
+        sid = self._make_session(repo)
+        rid = self._make_run(repo, sid)
+        # Error at warmup position
+        self._insert_keystroke(repo, rid, 1, "e", "cognitive_error", actual="r")
+        # Error at scored position
+        self._insert_keystroke(repo, rid, 4, "e", "cognitive_error", actual="r")
+
+        result = repo.get_error_timeline()
+        assert len(result) == 1  # only scored error
+        assert result[0][4] == 4  # position 4
+
+    def test_historical_position_rts_defaults_to_warmup(self, tmp_path):
+        """get_historical_position_rts uses self._warmup when warmup=None."""
+        repo = _make_warmup_repo(tmp_path)
+        sid = self._make_session(repo)
+        rid = self._make_run(repo, sid)
+        self._insert_keystroke(repo, rid, 0, "e", "correct", rt=100)
+        self._insert_keystroke(repo, rid, 1, "e", "correct", rt=100)
+        self._insert_keystroke(repo, rid, 2, "e", "correct", rt=100)
+        self._insert_keystroke(repo, rid, 3, "e", "correct", rt=200)
+
+        # No explicit warmup param — should use self._warmup=3
+        result = repo.get_historical_position_rts(min_target_length=20)
+        assert len(result) == 1
+        assert result[0][0] == 3

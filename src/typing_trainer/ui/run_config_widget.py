@@ -778,14 +778,16 @@ class RunConfigWidget(QWidget):
     # ------------------------------------------------------------------
     # Alerts, bigrams
     def get_single_letter_mode(self) -> bool:
-        """Whether single-letter display mode is enabled."""
-        return self._single_letter_cb.isChecked()
+        """Whether single-letter display mode is enabled.
+
+        Only active for Learn Keys / Fix Keys presets.  Returns ``False``
+        when the checkbox is hidden (Build Speed, Smooth Pairs).
+        """
+        return self._single_letter_cb.isVisible() and self._single_letter_cb.isChecked()
 
     def get_show_prev_result(self) -> bool:
         """Whether to show the previous keystroke result in single-letter mode."""
-        return (
-            self._single_letter_cb.isChecked() and self._show_prev_result_cb.isChecked()
-        )
+        return self.get_single_letter_mode() and self._show_prev_result_cb.isChecked()
 
     # ------------------------------------------------------------------
 

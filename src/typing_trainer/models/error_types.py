@@ -23,28 +23,37 @@ def classify_error(
     actual: str,
     layout: KeyboardLayout,
 ) -> ErrorCategory:
-    """Classify a confusion pair using a keyboard layout definition."""
+    """Classify a confusion pair using a keyboard layout definition.
+
+    Characters are lowercased before layout lookup so that uppercase
+    letters (e.g. German nouns) map to the correct physical key.
+    """
     if expected == actual:
         return "other"
 
-    if expected not in layout.fingers or actual not in layout.fingers:
+    # Lowercase for physical-key lookup — the layout only defines
+    # lowercase keys.  'H' and 'h' occupy the same physical position.
+    exp = expected.lower()
+    act = actual.lower()
+
+    if exp not in layout.fingers or act not in layout.fingers:
         return "other"
 
     # 1. Mirror: explicit homologous pair across the center split.
-    if layout.mirror_pairs.get(expected) == actual:
+    if layout.mirror_pairs.get(exp) == act:
         return "mirror"
 
     # 2. Same physical column, wrong row.
-    if layout.column_of.get(expected) == layout.column_of.get(actual):
+    if layout.column_of.get(exp) == layout.column_of.get(act):
         return "same_column"
 
     # 3. Same finger, wrong column. Important for index fingers that
     # cover two columns (and for future layouts with wider pinky usage).
-    if layout.fingers.get(expected) == layout.fingers.get(actual):
+    if layout.fingers.get(exp) == layout.fingers.get(act):
         return "same_finger"
 
     # 4. Same row, wrong finger/column.
-    if layout.row_of.get(expected) == layout.row_of.get(actual):
+    if layout.row_of.get(exp) == layout.row_of.get(act):
         return "same_row"
 
     return "other"

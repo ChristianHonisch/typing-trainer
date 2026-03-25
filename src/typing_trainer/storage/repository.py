@@ -56,10 +56,19 @@ def _str_to_dt(s: str | None) -> datetime | None:
 
 
 class Repository:
-    """CRUD operations for all persistent data."""
+    """CRUD operations for all persistent data.
 
-    def __init__(self, db: Database) -> None:
+    Args:
+        db: The database connection wrapper.
+        warmup: Number of warmup keystrokes at the start of each run
+            to exclude from accuracy, error-rate, and RT queries.
+            Matches ``Config.warmup_keystrokes``.  Defaults to ``0``
+            (include all keystrokes) for backward compatibility.
+    """
+
+    def __init__(self, db: Database, *, warmup: int = 0) -> None:
         self.db = db
+        self._warmup = warmup
 
     # ── Sessions ──────────────────────────────────────────────────────
 
@@ -540,7 +549,8 @@ class Repository:
         Returns rows newest-first (``ORDER BY id DESC``).
 
         Only scored keystrokes are included (``error_type IN
-        ('correct', 'cognitive_error')``, ``is_backspace = 0``).
+        ('correct', 'cognitive_error')``, ``is_backspace = 0``,
+        ``position >= self._warmup``).
 
         Args:
             learn_keys_only: When ``True``, restrict to keystrokes from
@@ -554,20 +564,22 @@ class Repository:
                    WHERE k.expected_char = ?
                      AND k.error_type IN ('correct', 'cognitive_error')
                      AND k.is_backspace = 0
+                     AND k.position >= ?
                      AND r.mode = 'relearning'
                      AND r.practice_type = 'random_strings'
                    ORDER BY k.id DESC
                    LIMIT ?""",
-                (letter, window),
+                (letter, self._warmup, window),
             ).fetchall()
         return self.db.conn.execute(
             """SELECT error_type FROM keystrokes
                WHERE expected_char = ?
                  AND error_type IN ('correct', 'cognitive_error')
                  AND is_backspace = 0
+                 AND position >= ?
                ORDER BY id DESC
                LIMIT ?""",
-            (letter, window),
+            (letter, self._warmup, window),
         ).fetchall()
 
     def get_per_letter_rolling_accuracy(
@@ -650,7 +662,8 @@ class Repository:
     def get_per_letter_run_counts(self) -> dict[str, int]:
         """Get the number of distinct runs each letter appeared in.
 
-        Only counts cognitive keystrokes (correct + cognitive_error).
+        Only counts cognitive keystrokes (correct + cognitive_error)
+        at ``position >= self._warmup``.
         Returns ``{letter: run_count}``.
         """
         rows = self.db.conn.execute(
@@ -659,7 +672,9 @@ class Repository:
                FROM keystrokes
                WHERE error_type IN ('correct', 'cognitive_error')
                  AND is_backspace = 0
-               GROUP BY expected_char"""
+                 AND position >= ?
+               GROUP BY expected_char""",
+            (self._warmup,),
         ).fetchall()
         return {row["letter"]: row["run_count"] for row in rows}
 
@@ -769,16 +784,18 @@ class Repository:
         """Get the full chronological error sequence for a letter.
 
         Returns a list of booleans (``True`` = cognitive error,
-        ``False`` = correct) covering every cognitive keystroke for the
-        letter, in chronological order.  No limit — returns all data.
+        ``False`` = correct) covering every scored cognitive keystroke
+        (``position >= self._warmup``) for the letter, in chronological
+        order.  No limit — returns all data.
         """
         rows = self.db.conn.execute(
             """SELECT error_type FROM keystrokes
                WHERE expected_char = ?
                  AND error_type IN ('correct', 'cognitive_error')
                  AND is_backspace = 0
+                 AND position >= ?
                ORDER BY id""",
-            (letter,),
+            (letter, self._warmup),
         ).fetchall()
         return [r["error_type"] == "cognitive_error" for r in rows]
 
@@ -787,7 +804,8 @@ class Repository:
 
         Returns chronologically ordered RT values in milliseconds,
         capped at 2000 ms.  Only correct keystrokes with a valid
-        ``reaction_time_ms`` are included.
+        ``reaction_time_ms`` at ``position >= self._warmup`` are
+        included.
         """
         rows = self.db.conn.execute(
             """SELECT reaction_time_ms FROM keystrokes
@@ -796,8 +814,9 @@ class Repository:
                  AND is_backspace = 0
                  AND reaction_time_ms IS NOT NULL
                  AND reaction_time_ms <= 2000
+                 AND position >= ?
                ORDER BY id""",
-            (letter,),
+            (letter, self._warmup),
         ).fetchall()
         return [r["reaction_time_ms"] for r in rows]
 
@@ -808,7 +827,8 @@ class Repository:
 
         Returns ``{letter: (median_rt_ms, cv, count)}``.
         Only correct keystrokes with valid ``reaction_time_ms <= 2000``
-        are included.  Letters with no data return ``(0.0, 0.0, 0)``.
+        at ``position >= self._warmup`` are included.  Letters with no
+        data return ``(0.0, 0.0, 0)``.
         """
         result: dict[str, tuple[float, float, int]] = {}
         for letter in letters:
@@ -819,9 +839,10 @@ class Repository:
                      AND is_backspace = 0
                      AND reaction_time_ms IS NOT NULL
                      AND reaction_time_ms <= 2000
+                     AND position >= ?
                    ORDER BY id DESC
                    LIMIT ?""",
-                (letter, window),
+                (letter, self._warmup, window),
             ).fetchall()
 
             count = len(rows)
@@ -848,9 +869,10 @@ class Repository:
     ) -> list[tuple[int, float]]:
         """Compute rolling accuracy for a letter at each run boundary.
 
-        Uses a sliding window of the last ``window`` cognitive keystrokes
-        for the given letter.  Returns one data point per run where the
-        letter appeared: ``(run_id, rolling_accuracy)``.
+        Uses a sliding window of the last ``window`` scored cognitive
+        keystrokes (``position >= self._warmup``) for the given letter.
+        Returns one data point per run where the letter appeared:
+        ``(run_id, rolling_accuracy)``.
 
         Efficient: single DB query + single-pass sliding window.
         """
@@ -859,8 +881,9 @@ class Repository:
                WHERE expected_char = ?
                  AND error_type IN ('correct', 'cognitive_error')
                  AND is_backspace = 0
+                 AND position >= ?
                ORDER BY id""",
-            (letter,),
+            (letter, self._warmup),
         ).fetchall()
 
         if not rows:
@@ -894,12 +917,14 @@ class Repository:
     ) -> dict[str, tuple[int, int, float]]:
         """Get aggregate error rate per letter across all keystrokes.
 
+        Only includes scored cognitive keystrokes (correct +
+        cognitive_error) at ``position >= self._warmup``.
+
         Args:
             last_n: If set, only consider the most recent *last_n*
                 cognitive keystrokes (by ``id DESC``).
 
         Returns dict of ``letter -> (errors, total, error_rate)``.
-        Only includes cognitive keystrokes (correct + cognitive_error).
         """
         if last_n is not None:
             rows = self.db.conn.execute(
@@ -908,6 +933,7 @@ class Repository:
                        FROM keystrokes
                        WHERE error_type IN ('correct', 'cognitive_error')
                          AND is_backspace = 0
+                         AND position >= ?
                        ORDER BY id DESC
                        LIMIT ?
                    )
@@ -918,7 +944,7 @@ class Repository:
                    FROM recent
                    GROUP BY expected_char
                    ORDER BY expected_char""",
-                (last_n,),
+                (self._warmup, last_n),
             ).fetchall()
         else:
             rows = self.db.conn.execute(
@@ -929,8 +955,10 @@ class Repository:
                    FROM keystrokes
                    WHERE error_type IN ('correct', 'cognitive_error')
                      AND is_backspace = 0
+                     AND position >= ?
                    GROUP BY expected_char
-                   ORDER BY expected_char"""
+                   ORDER BY expected_char""",
+                (self._warmup,),
             ).fetchall()
 
         result: dict[str, tuple[int, int, float]] = {}
@@ -946,8 +974,8 @@ class Repository:
 
         Returns ``(run_id, [rt_ms, ...])`` for each run where the letter
         was typed correctly with a recorded reaction time.  Keystrokes
-        with ``reaction_time_ms > RT_CAP_MS`` (2 s) are excluded as they
-        represent pauses rather than motor responses.  The caller is
+        with ``reaction_time_ms > RT_CAP_MS`` (2 s) or at
+        ``position < self._warmup`` are excluded.  The caller is
         responsible for aggregation (e.g. trimmed mean).
         """
         rows = self.db.conn.execute(
@@ -958,8 +986,9 @@ class Repository:
                  AND reaction_time_ms IS NOT NULL
                  AND reaction_time_ms <= ?
                  AND is_backspace = 0
+                 AND position >= ?
                ORDER BY run_id, position""",
-            (letter, RT_CAP_MS),
+            (letter, RT_CAP_MS, self._warmup),
         ).fetchall()
 
         # Group by run_id preserving order
@@ -987,7 +1016,7 @@ class Repository:
         """Get counts of each (expected, actual) confusion pair.
 
         Only includes cognitive errors (not motor overflow, burst repeat,
-        or backspace corrections).
+        or backspace corrections) at ``position >= self._warmup``.
 
         Args:
             last_n: If set, only consider the most recent *last_n*
@@ -1006,6 +1035,7 @@ class Repository:
                        FROM keystrokes
                        WHERE error_type IN ('correct', 'cognitive_error')
                          AND is_backspace = 0
+                         AND position >= ?
                        ORDER BY id DESC
                        LIMIT ?
                    )
@@ -1014,7 +1044,7 @@ class Repository:
                    WHERE error_type = 'cognitive_error'
                    GROUP BY expected_char, actual_char
                    ORDER BY cnt DESC""",
-                (last_n,),
+                (self._warmup, last_n),
             ).fetchall()
         else:
             rows = self.db.conn.execute(
@@ -1022,8 +1052,10 @@ class Repository:
                    FROM keystrokes
                    WHERE error_type = 'cognitive_error'
                      AND is_backspace = 0
+                     AND position >= ?
                    GROUP BY expected_char, actual_char
-                   ORDER BY cnt DESC"""
+                   ORDER BY cnt DESC""",
+                (self._warmup,),
             ).fetchall()
 
         return [(row["expected_char"], row["actual_char"], row["cnt"]) for row in rows]
@@ -1038,6 +1070,9 @@ class Repository:
         A swap is two consecutive cognitive errors within the same run
         where ``expected₁ == actual₂`` and ``actual₁ == expected₂``
         (i.e. the two characters were typed in the wrong order).
+
+        Only scored keystrokes at ``position >= self._warmup`` are
+        considered.
 
         Args:
             last_n: If set, only consider the most recent *last_n*
@@ -1063,6 +1098,7 @@ class Repository:
                        FROM keystrokes
                        WHERE error_type IN ('correct', 'cognitive_error')
                          AND is_backspace = 0
+                         AND position >= ?
                        ORDER BY id DESC
                        LIMIT ?
                    ),
@@ -1092,7 +1128,7 @@ class Repository:
                      AND actual_char = prev_expected
                    GROUP BY char_a, char_b
                    ORDER BY cnt DESC""",
-                (last_n,),
+                (self._warmup, last_n),
             ).fetchall()
         else:
             rows = self.db.conn.execute(
@@ -1110,6 +1146,7 @@ class Repository:
                        FROM keystrokes
                        WHERE error_type IN ('correct', 'cognitive_error')
                          AND is_backspace = 0
+                         AND position >= ?
                    )
                    SELECT
                        CASE WHEN expected_char < actual_char
@@ -1123,7 +1160,8 @@ class Repository:
                      AND expected_char = prev_actual
                      AND actual_char = prev_expected
                    GROUP BY char_a, char_b
-                   ORDER BY cnt DESC"""
+                   ORDER BY cnt DESC""",
+                (self._warmup,),
             ).fetchall()
 
         return [(row["char_a"], row["char_b"], row["cnt"]) for row in rows]
@@ -1136,8 +1174,8 @@ class Repository:
         Groups keystrokes into buckets of ``bucket_size`` consecutive
         positions (0-4, 5-9, ...) and counts errors vs total in each.
 
-        Only includes cognitive keystrokes (correct + cognitive_error,
-        no backspace).
+        Only includes scored cognitive keystrokes (correct +
+        cognitive_error, no backspace) at ``position >= self._warmup``.
 
         Returns:
             List of ``(bucket_start, errors, total)`` sorted by
@@ -1152,9 +1190,10 @@ class Repository:
                FROM keystrokes
                WHERE error_type IN ('correct', 'cognitive_error')
                  AND is_backspace = 0
+                 AND position >= ?
                GROUP BY bucket_start
                ORDER BY bucket_start""",
-            (bucket_size, bucket_size),
+            (bucket_size, bucket_size, self._warmup),
         ).fetchall()
 
         return [(row["bucket_start"], row["errors"], row["total"]) for row in rows]
@@ -1163,7 +1202,7 @@ class Repository:
         self,
         min_target_length: int,
         n_runs: int = 64,
-        warmup: int = 3,
+        warmup: int | None = None,
     ) -> list[tuple[int, str, float]]:
         """Get per-position reaction times from recent qualifying runs.
 
@@ -1180,6 +1219,7 @@ class Repository:
         Results are **not** ordered in any particular way; callers should
         group by position themselves.
         """
+        effective_warmup = warmup if warmup is not None else self._warmup
         rows = self.db.conn.execute(
             """SELECT k.position, k.expected_char, k.reaction_time_ms
                FROM keystrokes k
@@ -1194,7 +1234,7 @@ class Repository:
                  AND k.reaction_time_ms IS NOT NULL
                  AND k.reaction_time_ms <= ?
                  AND k.position >= ?""",
-            (min_target_length, n_runs, RT_CAP_MS, warmup),
+            (min_target_length, n_runs, RT_CAP_MS, effective_warmup),
         ).fetchall()
         return [
             (row["position"], row["expected_char"], float(row["reaction_time_ms"]))
@@ -1206,9 +1246,10 @@ class Repository:
     ) -> list[tuple[int, dict[str, float]]]:
         """Get per-letter occurrence percentage for each run.
 
-        For every run, returns the percentage of keystrokes targeting each
-        letter.  Only counts non-backspace keystrokes with ``error_type``
-        in (``correct``, ``cognitive_error``) — i.e. the intended text
+        For every run, returns the percentage of scored keystrokes
+        (``position >= self._warmup``) targeting each letter.  Only
+        counts non-backspace keystrokes with ``error_type`` in
+        (``correct``, ``cognitive_error``) — i.e. the intended text
         distribution, excluding motor overflow and burst repeat.
 
         Returns:
@@ -1220,8 +1261,10 @@ class Repository:
                FROM keystrokes
                WHERE is_backspace = 0
                  AND error_type IN ('correct', 'cognitive_error')
+                 AND position >= ?
                GROUP BY run_id, expected_char
                ORDER BY run_id""",
+            (self._warmup,),
         ).fetchall()
 
         # Build per-run totals and per-letter counts
@@ -1255,8 +1298,9 @@ class Repository:
 
         Returns a list of
         ``(run_id, expected_char, actual_char, error_type, position, target_length)``
-        for every non-backspace keystroke where ``error_type != 'correct'``,
-        ordered chronologically (by ``run_id``, then ``position``).
+        for every non-backspace keystroke at ``position >= self._warmup``
+        where ``error_type != 'correct'``, ordered chronologically
+        (by ``run_id``, then ``position``).
         """
         rows = self.db.conn.execute(
             """SELECT k.run_id, k.expected_char, k.actual_char,
@@ -1265,7 +1309,9 @@ class Repository:
                JOIN runs r ON r.id = k.run_id
                WHERE k.error_type != 'correct'
                  AND k.is_backspace = 0
+                 AND k.position >= ?
                ORDER BY k.run_id, k.position""",
+            (self._warmup,),
         ).fetchall()
         return [
             (
@@ -1320,13 +1366,14 @@ class Repository:
                    WHERE k.prev_char IS NOT NULL
                      AND k.error_type IN ('correct', 'cognitive_error')
                      AND k.is_backspace = 0
+                     AND k.position >= ?
                      AND pk.error_type = 'correct'
                      AND pk.is_backspace = 0
                      AND r.practice_type IN ({placeholders})
                    GROUP BY k.prev_char, k.expected_char
                    HAVING total >= ?
                    ORDER BY CAST(errors AS REAL) / total DESC""",
-                (*practice_types, min_count),
+                (self._warmup, *practice_types, min_count),
             ).fetchall()
         else:
             rows = self.db.conn.execute(
@@ -1341,12 +1388,13 @@ class Repository:
                    WHERE k.prev_char IS NOT NULL
                      AND k.error_type IN ('correct', 'cognitive_error')
                      AND k.is_backspace = 0
+                     AND k.position >= ?
                      AND pk.error_type = 'correct'
                      AND pk.is_backspace = 0
                    GROUP BY k.prev_char, k.expected_char
                    HAVING total >= ?
                    ORDER BY CAST(errors AS REAL) / total DESC""",
-                (min_count,),
+                (self._warmup, min_count),
             ).fetchall()
 
         return [
@@ -1397,11 +1445,12 @@ class Repository:
                      AND k.error_type = 'correct'
                      AND k.reaction_time_ms IS NOT NULL
                      AND k.is_backspace = 0
+                     AND k.position >= ?
                      AND pk.error_type = 'correct'
                      AND pk.is_backspace = 0
                      AND r.practice_type IN ({placeholders})
                    ORDER BY k.prev_char, k.expected_char""",
-                tuple(practice_types),
+                (self._warmup, *practice_types),
             ).fetchall()
         else:
             rows = self.db.conn.execute(
@@ -1414,9 +1463,11 @@ class Repository:
                      AND k.error_type = 'correct'
                      AND k.reaction_time_ms IS NOT NULL
                      AND k.is_backspace = 0
+                     AND k.position >= ?
                      AND pk.error_type = 'correct'
                      AND pk.is_backspace = 0
-                   ORDER BY k.prev_char, k.expected_char"""
+                   ORDER BY k.prev_char, k.expected_char""",
+                (self._warmup,),
             ).fetchall()
 
         # Group by (prev_char, expected_char) and collect RT values

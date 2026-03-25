@@ -355,6 +355,41 @@ class TestRandomWords:
         assert words_seen["se"] > words_seen["en"] * 1.5
 
 
+class TestCapitalizedCorpus:
+    """Tests for corpus words with proper capitalization."""
+
+    def test_preserves_case_in_output(self, tmp_path: Path):
+        """Words with uppercase in corpus appear in generated text as-is."""
+        corpus_file = tmp_path / "corpus_de.txt"
+        corpus_file.write_text("Haus\nder\ndie\n")
+
+        config = Config(corpus_dir=str(tmp_path))
+        gen = TextGenerator(config)
+        active = make_active_letters("h", "a", "u", "s", "d", "e", "r", "i")
+
+        text = gen.generate(PracticeType.RANDOM_WORDS, 100, active, language="de")
+        words = text.split()
+        seen_upper = any(w == "Haus" for w in words)
+        seen_lower = any(w in ("der", "die") for w in words)
+        assert seen_upper, "Capitalized 'Haus' should appear in output"
+        assert seen_lower, "Lowercase words should also appear"
+
+    def test_filters_by_lowercase_active_set(self, tmp_path: Path):
+        """Capitalized words are filtered by their lowercase letters."""
+        corpus_file = tmp_path / "corpus_de.txt"
+        corpus_file.write_text("Haus\nBerg\n")
+
+        config = Config(corpus_dir=str(tmp_path))
+        gen = TextGenerator(config)
+        # Active set has h, a, u, s — 'Haus' should match, 'Berg' should not
+        active = make_active_letters("h", "a", "u", "s")
+
+        text = gen.generate(PracticeType.RANDOM_WORDS, 50, active, language="de")
+        words = text.split()
+        for word in words:
+            assert word == "Haus"
+
+
 class TestKeyboardLayout:
     def test_german_introduction_order(self):
         from typing_trainer.models.keyboard_layout import get_introduction_order

@@ -108,7 +108,10 @@ class LetterStats:
     sessions_in_current_state: int = 0
     sessions_since_introduced: int = 0
 
-    # Per-session accuracy history (most recent first, kept for state transitions)
+    # Per-session accuracy history (most recent first).
+    # Legacy: previously used for CONSOLIDATING->STABLE transition (3 consecutive
+    # sessions >= 95%).  Now replaced by keystroke-based rolling accuracy.
+    # Still written per session and persisted for DB schema compatibility.
     accuracy_history: list[float] = field(default_factory=list)
 
     # Total keystrokes (all runs) at the time this letter was introduced.

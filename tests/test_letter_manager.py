@@ -230,22 +230,64 @@ class TestStateTransitions:
         assert active["e"].state == LetterState.CONSOLIDATING
 
     def test_consolidating_to_stable(self):
-        config = Config(advancement_accuracy=0.95)
+        """CONSOLIDATING -> STABLE when rolling accuracy meets threshold
+        over a full keystroke window."""
+        config = Config(advancement_accuracy=0.95, advancement_accuracy_window=200)
         manager = LetterManager(config)
         active = {
             "e": LetterStats(
                 letter="e",
                 state=LetterState.CONSOLIDATING,
                 sessions_since_introduced=5,
-                accuracy_history=[0.96, 0.97],  # 2 good sessions already
+                rolling_error_rate=0.03,  # 3% — below 5% threshold
+                rolling_keystroke_count=200,  # full window
             )
         }
 
         session = make_session(accuracy=0.96, per_letter_errors={"e": 0.03})
         active, warnings = manager.update_states_after_session(active, session)
 
-        # Now has 3 sessions above threshold -> stable
         assert active["e"].state == LetterState.STABLE
+
+    def test_consolidating_stays_insufficient_keystrokes(self):
+        """CONSOLIDATING stays CONSOLIDATING when rolling accuracy is good
+        but the keystroke window is not yet full."""
+        config = Config(advancement_accuracy=0.95, advancement_accuracy_window=200)
+        manager = LetterManager(config)
+        active = {
+            "e": LetterStats(
+                letter="e",
+                state=LetterState.CONSOLIDATING,
+                sessions_since_introduced=5,
+                rolling_error_rate=0.02,  # excellent accuracy
+                rolling_keystroke_count=150,  # not enough — need 200
+            )
+        }
+
+        session = make_session(accuracy=0.98, per_letter_errors={"e": 0.02})
+        active, warnings = manager.update_states_after_session(active, session)
+
+        assert active["e"].state == LetterState.CONSOLIDATING
+
+    def test_consolidating_stays_low_accuracy(self):
+        """CONSOLIDATING stays CONSOLIDATING when keystroke window is full
+        but rolling accuracy is below threshold."""
+        config = Config(advancement_accuracy=0.95, advancement_accuracy_window=200)
+        manager = LetterManager(config)
+        active = {
+            "e": LetterStats(
+                letter="e",
+                state=LetterState.CONSOLIDATING,
+                sessions_since_introduced=5,
+                rolling_error_rate=0.06,  # 6% — above 5% threshold
+                rolling_keystroke_count=200,  # full window
+            )
+        }
+
+        session = make_session(accuracy=0.94, per_letter_errors={"e": 0.06})
+        active, warnings = manager.update_states_after_session(active, session)
+
+        assert active["e"].state == LetterState.CONSOLIDATING
 
     def test_stable_to_degraded(self):
         config = Config(advancement_accuracy=0.95)
@@ -366,8 +408,12 @@ class TestStateTransitions:
         assert active["e"].state == LetterState.DEGRADED
 
     def test_degraded_full_recovery_path(self):
-        """DEGRADED -> CONSOLIDATING -> STABLE full recovery after 3 sessions."""
-        config = Config(advancement_accuracy=0.95)
+        """DEGRADED -> CONSOLIDATING -> STABLE full recovery path.
+
+        Once in CONSOLIDATING, promotion to STABLE requires a full
+        keystroke window (200) at >= 95% accuracy.
+        """
+        config = Config(advancement_accuracy=0.95, advancement_accuracy_window=200)
         manager = LetterManager(config)
         active = {
             "e": LetterStats(
@@ -383,11 +429,12 @@ class TestStateTransitions:
         active, _ = manager.update_states_after_session(active, session1)
         assert active["e"].state == LetterState.CONSOLIDATING
 
-        # Sessions 2-4: 3 good sessions -> STABLE
-        for _ in range(3):
-            active["e"].rolling_error_rate = 0.03
-            session = make_session(accuracy=0.97, per_letter_errors={"e": 0.03})
-            active, _ = manager.update_states_after_session(active, session)
+        # Simulate keystroke-based promotion: rolling window is full
+        # and accuracy meets threshold.
+        active["e"].rolling_error_rate = 0.03
+        active["e"].rolling_keystroke_count = 200
+        session2 = make_session(accuracy=0.97, per_letter_errors={"e": 0.03})
+        active, _ = manager.update_states_after_session(active, session2)
 
         assert active["e"].state == LetterState.STABLE
 
@@ -684,6 +731,39 @@ class TestRecheckAllStates:
         }
         assert manager.recheck_all_states(active) is False
         assert active["e"].state == LetterState.INTRODUCING
+
+    def test_consolidating_to_stable_on_recheck(self):
+        """CONSOLIDATING -> STABLE via recheck when rolling accuracy meets
+        threshold over a full keystroke window."""
+        config = Config(advancement_accuracy=0.95, advancement_accuracy_window=200)
+        manager = LetterManager(config)
+        active = {
+            "e": LetterStats(
+                letter="e",
+                state=LetterState.CONSOLIDATING,
+                rolling_error_rate=0.03,
+                rolling_keystroke_count=200,
+                sessions_since_introduced=5,
+            ),
+        }
+        assert manager.recheck_all_states(active) is True
+        assert active["e"].state == LetterState.STABLE
+
+    def test_consolidating_stays_on_recheck_insufficient_keystrokes(self):
+        """CONSOLIDATING stays if rolling window is not full."""
+        config = Config(advancement_accuracy=0.95, advancement_accuracy_window=200)
+        manager = LetterManager(config)
+        active = {
+            "e": LetterStats(
+                letter="e",
+                state=LetterState.CONSOLIDATING,
+                rolling_error_rate=0.02,
+                rolling_keystroke_count=150,
+                sessions_since_introduced=5,
+            ),
+        }
+        assert manager.recheck_all_states(active) is False
+        assert active["e"].state == LetterState.CONSOLIDATING
 
     def test_multiple_letters_mixed(self):
         """Multiple letters with different transitions."""

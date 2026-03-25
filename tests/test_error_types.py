@@ -68,3 +68,17 @@ class TestClassifyError:
     def test_priority_same_finger_over_same_row(self):
         # r/t share both same row and same finger; same_finger wins.
         assert classify_error("r", "t", QWERTZ) == "same_finger"
+
+    def test_uppercase_letters_classify_correctly(self):
+        """Uppercase letters should be lowercased for layout lookup."""
+        # 'T' and 'Z' are the same physical keys as 't' and 'z'
+        assert classify_error("T", "Z", QWERTZ) == "mirror"
+        assert classify_error("G", "H", QWERTZ) == "mirror"
+        assert classify_error("R", "T", QWERTZ) == "same_finger"
+        assert classify_error("Q", "A", QWERTZ) == "same_column"
+
+    def test_mixed_case_classify_correctly(self):
+        """One uppercase and one lowercase should still classify."""
+        assert classify_error("T", "z", QWERTZ) == "mirror"
+        assert classify_error("t", "Z", QWERTZ) == "mirror"
+        assert classify_error("G", "h", QWERTZ) == "mirror"
