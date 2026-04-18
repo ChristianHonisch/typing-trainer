@@ -8,6 +8,8 @@ Running accuracy display at the top.
 
 from __future__ import annotations
 
+import math
+
 from PyQt6.QtCore import QElapsedTimer, QRectF, QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import (
     QColor,
@@ -60,6 +62,7 @@ class CursorOverlayTextEdit(QTextEdit):
         super().__init__(parent)
         self._highlight_pos: int = -1
         self._highlight_char: str = ""
+        self._highlight_error: bool = False
 
     def set_cursor_highlight(self, pos: int, char: str) -> None:
         """Set which character position to highlight as the cursor.
@@ -70,6 +73,16 @@ class CursorOverlayTextEdit(QTextEdit):
         """
         self._highlight_pos = pos
         self._highlight_char = char
+        vp = self.viewport()
+        assert vp is not None
+        vp.update()
+
+    def set_cursor_error(self, error: bool) -> None:
+        """Set the cursor highlight to error (red) or normal (grey).
+
+        Used by error handling modes to indicate a rejected keystroke.
+        """
+        self._highlight_error = error
         vp = self.viewport()
         assert vp is not None
         vp.update()
@@ -100,8 +113,9 @@ class CursorOverlayTextEdit(QTextEdit):
 
         painter = QPainter(self.viewport())
         try:
-            # Draw background
-            painter.fillRect(highlight_rect, QColor(COLOR_BG_CURSOR))
+            # Draw background — red when a keystroke was rejected
+            bg_color = COLOR_ERROR if self._highlight_error else COLOR_BG_CURSOR
+            painter.fillRect(highlight_rect, QColor(bg_color))
 
             # Draw the character (or middle-dot for space)
             display_char = (
@@ -349,16 +363,24 @@ class TypingWidget(QWidget):
         cursor.setBlockFormat(block_fmt)
 
         # Previous keystroke result (optional)
-        if self._show_prev_result and pos > 0:
-            prev_idx = pos - 1
+        # In correction-gated modes the cursor can stay on the same
+        # position after an error, so prefer the current position when
+        # it already has a recorded attempt.
+        result_idx: int | None = None
+        if pos in first_inputs:
+            result_idx = pos
+        elif pos > 0:
+            result_idx = pos - 1
+
+        if self._show_prev_result and result_idx is not None:
             prev_fmt = QTextCharFormat()
             prev_fmt.setFontFamily(font_family)
             prev_fmt.setFontPointSize(24)
 
-            if prev_idx in first_inputs:
-                actual, error_type = first_inputs[prev_idx]
+            if result_idx in first_inputs:
+                actual, error_type = first_inputs[result_idx]
                 if error_type == ErrorType.COGNITIVE_ERROR:
-                    expected_ch = target[prev_idx]
+                    expected_ch = target[result_idx]
                     exp_display = "\u00b7" if expected_ch == " " else expected_ch
                     act_display = "\u00b7" if actual == " " else actual
                     prev_fmt.setForeground(QColor(COLOR_ERROR))
@@ -380,7 +402,12 @@ class TypingWidget(QWidget):
             main_fmt = QTextCharFormat()
             main_fmt.setFontFamily(font_family)
             main_fmt.setFontPointSize(72)
-            main_fmt.setForeground(QColor(COLOR_TEXT_BRIGHT))
+            color = (
+                COLOR_HIGHLIGHT_WEAK
+                if char in self._highlight_letters
+                else COLOR_TEXT_BRIGHT
+            )
+            main_fmt.setForeground(QColor(color))
             cursor.insertText(display, main_fmt)
 
         self._text_display.setTextCursor(cursor)
@@ -430,14 +457,17 @@ class TypingWidget(QWidget):
 
         # Color accuracy based on proximity to fail threshold
         threshold = state.fail_threshold * 100
-        if accuracy >= 97:
+        if accuracy >= threshold + 2:
             color = COLOR_SUCCESS
-        elif accuracy >= threshold + 2:
+        elif accuracy >= threshold:
             color = COLOR_WARNING
         else:
             color = COLOR_ERROR
 
-        self._accuracy_label.setText(f"Accuracy: {accuracy:.1f}%")
+        # Floor-truncate so the display never exceeds the raw value
+        # (avoids showing "95.0%" when actual is 94.98%).
+        acc_display = math.floor(accuracy * 10) / 10
+        self._accuracy_label.setText(f"Accuracy: {acc_display:.1f}%")
         self._accuracy_label.setStyleSheet(f"color: {color};")
         self._progress_label.setText(f"{pos} / {target_len}")
 
@@ -486,6 +516,7 @@ class TypingWidget(QWidget):
         # Handle backspace
         if key == Qt.Key.Key_Backspace:
             self.engine.process_keystroke("\b", timestamp_ms)
+            self._text_display.set_cursor_error(False)
             self._render_text()
             self._update_stats()
             return
@@ -503,8 +534,24 @@ class TypingWidget(QWidget):
             return
 
         # Process the character
+        pos_before = self.engine.state.cursor_position
         char = text[0]
-        self.engine.process_keystroke(char, timestamp_ms)
+        result = self.engine.process_keystroke(char, timestamp_ms)
+
+        # Visual feedback: turn cursor box red when keystroke was rejected
+        # (force_correct: cursor didn't advance) or blocked (force_backspace:
+        # correction gate returned None, or error just set correction pos).
+        cursor_stuck = self.engine.state.cursor_position == pos_before
+        error_feedback = (
+            result is None  # rejected by correction gate
+            or (
+                cursor_stuck
+                and result is not None
+                and result.error_type == ErrorType.COGNITIVE_ERROR
+            )
+            or self.engine.state.error_correction_pos is not None
+        )
+        self._text_display.set_cursor_error(error_feedback)
 
         self._render_text()
         self._update_stats()
