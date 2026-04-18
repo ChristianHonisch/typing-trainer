@@ -65,6 +65,11 @@ class EngineState:
     is_finished: bool = False
     is_failed: bool = False
 
+    # Error correction tracking (for force_correct / force_backspace modes)
+    error_correction_pos: int | None = None
+    """Position requiring correction.  When set, only certain keys are
+    accepted depending on ``Config.error_handling``."""
+
     @property
     def accuracy(self) -> float:
         """Current running accuracy (cognitive errors only)."""
@@ -159,6 +164,42 @@ class TypingEngine:
         # Start timing on first keystroke
         if self.state.start_time is None:
             self.state.start_time = datetime.now()
+
+        # --- Error correction gate ---
+        # When error_correction_pos is set (force_correct / force_backspace),
+        # only specific keys are accepted.
+        if self.state.error_correction_pos is not None:
+            ecp = self.state.error_correction_pos
+
+            if actual_char == "\b":
+                result = self._handle_backspace(timestamp_ms)
+                # Once cursor is at or before the error position,
+                # clear correction mode — normal processing resumes.
+                if self.state.cursor_position <= ecp:
+                    self.state.error_correction_pos = None
+                return result
+
+            # force_backspace: user must backspace before typing
+            if (
+                self.config.error_handling == "force_backspace"
+                and self.state.cursor_position > ecp
+            ):
+                return None  # only backspace accepted
+
+            # At correction position: only the correct key is accepted.
+            if self.state.cursor_position < len(self.state.target_text):
+                corr_expected = self.state.target_text[self.state.cursor_position]
+                corr_actual = actual_char
+                if (
+                    not self.config.require_capitalization
+                    and corr_actual.lower() == corr_expected.lower()
+                ):
+                    corr_actual = corr_expected
+                if corr_actual != corr_expected:
+                    return None  # wrong key ignored during correction
+
+            # Correct key typed — clear correction, fall through
+            self.state.error_correction_pos = None
 
         # Handle backspace
         if actual_char == "\b":
@@ -264,10 +305,39 @@ class TypingEngine:
         )
         self.state.keystroke_log.append(event)
 
+        # --- Error handling mode: force_correct ---
+        # Score the error (done above) but do NOT advance cursor.
+        # The user must type the correct key to proceed.
+        if (
+            classification.error_type == ErrorType.COGNITIVE_ERROR
+            and self.config.error_handling == "force_correct"
+        ):
+            self.state.error_correction_pos = pos
+            # Don't advance cursor, don't update prev tracking.
+            # Check fail threshold even though cursor didn't advance.
+            if (
+                self.config.fail_threshold_enabled
+                and is_first_input
+                and self.state.cognitive_errors >= self.config.fail_threshold_min_errors
+                and self.state.accuracy < self.state.fail_threshold
+            ):
+                self.state.is_failed = True
+                self.state.is_finished = True
+            return event
+
         # Advance cursor
         self.state.cursor_position += 1
         self.state.prev_timestamp_ms = timestamp_ms
         self.state.prev_char = actual_char
+
+        # --- Error handling mode: force_backspace ---
+        # Cursor advanced normally, but block further input until
+        # the user presses backspace and retypes correctly.
+        if (
+            classification.error_type == ErrorType.COGNITIVE_ERROR
+            and self.config.error_handling == "force_backspace"
+        ):
+            self.state.error_correction_pos = pos
 
         # Check fail threshold (only after accumulating enough errors)
         if (

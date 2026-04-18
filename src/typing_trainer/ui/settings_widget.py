@@ -90,6 +90,7 @@ class SettingsWidget(QWidget):
         self._profile_name = profile_name
         self._spinboxes: dict[str, QSpinBox | QDoubleSpinBox] = {}
         self._checkboxes: dict[str, QCheckBox] = {}
+        self._combos: dict[str, QComboBox] = {}
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -334,6 +335,20 @@ class SettingsWidget(QWidget):
             "Require capitalization",
             "require_capitalization",
             tip="Typing 'h' when 'H' is expected counts as an error",
+        )
+
+        # Error Handling
+        adv_layout.addWidget(self._make_section_label("Error Handling"))
+        self._add_combo_row(
+            adv_layout,
+            "On error",
+            "error_handling",
+            [
+                ("ignore", "Ignore (advance)"),
+                ("force_correct", "Force correct key"),
+                ("force_backspace", "Force backspace"),
+            ],
+            tip="How the engine responds when a wrong key is pressed",
         )
 
         # Speed Training
@@ -743,6 +758,59 @@ class SettingsWidget(QWidget):
 
         parent_layout.addLayout(row)
 
+    def _add_combo_row(
+        self,
+        parent_layout: QVBoxLayout,
+        label: str,
+        field: str,
+        options: list[tuple[str, str]],
+        tip: str = "",
+    ) -> None:
+        """Add a combo box row for a string config field.
+
+        Args:
+            options: List of ``(value, display_label)`` pairs.
+        """
+        row = QHBoxLayout()
+        lbl = self._make_label(label)
+        if tip:
+            lbl.setToolTip(tip)
+        row.addWidget(lbl)
+
+        combo = QComboBox()
+        combo.setFont(app_font(10))
+        combo.setFixedWidth(170)
+        for value, display in options:
+            combo.addItem(display, value)
+
+        current = getattr(self._config, field)
+        idx = combo.findData(current)
+        if idx >= 0:
+            combo.setCurrentIndex(idx)
+
+        def handler(index: int) -> None:
+            data = combo.itemData(index)
+            if data is not None:
+                setattr(self._config, field, data)
+                self.config_value_changed.emit()
+
+        combo.currentIndexChanged.connect(handler)
+        combo.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        combo.wheelEvent = lambda event: event.ignore()  # type: ignore[assignment]
+        row.addStretch()
+        row.addWidget(combo)
+
+        default_val = getattr(_DEFAULTS, field)
+        reset = self._make_reset_btn()
+        reset.clicked.connect(
+            lambda _=None, c=combo, d=default_val: c.setCurrentIndex(c.findData(d))
+        )
+        row.addWidget(reset)
+
+        self._combos[field] = combo
+
+        parent_layout.addLayout(row)
+
     # ------------------------------------------------------------------
     # Profile management
     # ------------------------------------------------------------------
@@ -794,6 +862,12 @@ class SettingsWidget(QWidget):
             cb.blockSignals(True)
             cb.setChecked(getattr(config, field_name))
             cb.blockSignals(False)
+        for field_name, combo in self._combos.items():
+            combo.blockSignals(True)
+            idx = combo.findData(getattr(config, field_name))
+            if idx >= 0:
+                combo.setCurrentIndex(idx)
+            combo.blockSignals(False)
         # Language combo
         idx = self._lang_combo.findData(config.language)
         if idx >= 0:

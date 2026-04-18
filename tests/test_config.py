@@ -29,6 +29,7 @@ class TestConfigDefaults:
         assert config.max_letter_share == 0.35
         assert config.warmup_keystrokes == 3
         assert config.require_capitalization is True
+        assert config.error_handling == "ignore"
         assert config.fail_threshold_enabled is False
         assert config.language == "de"
 

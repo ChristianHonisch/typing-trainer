@@ -67,6 +67,18 @@ class Config:
     generate lowercase-only random strings).
     """
 
+    # --- Error handling ---
+    error_handling: str = "ignore"
+    """How to handle typing errors during a run.
+
+    - ``ignore``: Wrong key is recorded, cursor advances (default).
+    - ``force_correct``: Wrong key is scored as error but cursor does
+      NOT advance.  Only the correct key moves forward.
+    - ``force_backspace``: Wrong key is recorded and cursor advances,
+      but further input is blocked until the user presses backspace
+      and then types the correct key.
+    """
+
     # --- Run defaults ---
     run_length_default_relearning: int = 60
     """Default number of target keystrokes per run in relearning mode.

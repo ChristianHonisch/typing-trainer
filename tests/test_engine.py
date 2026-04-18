@@ -664,3 +664,179 @@ class TestCapitalization:
 
         engine.process_keystroke("x", 1000)  # wrong letter entirely
         assert engine.state.cognitive_errors == 1
+
+
+class TestErrorHandlingIgnore:
+    """Tests for error_handling='ignore' (default — current behavior)."""
+
+    def test_error_advances_cursor(self):
+        config = Config(warmup_keystrokes=0, error_handling="ignore")
+        engine = TypingEngine(config)
+        engine.start_run("abc", mode=RunMode.SPEED)
+
+        engine.process_keystroke("x", 1000)  # error at pos 0
+        assert engine.state.cursor_position == 1
+        assert engine.state.cognitive_errors == 1
+
+
+class TestErrorHandlingForceCorrect:
+    """Tests for error_handling='force_correct'."""
+
+    def _make_engine(self) -> TypingEngine:
+        config = Config(warmup_keystrokes=0, error_handling="force_correct")
+        return TypingEngine(config)
+
+    def test_error_does_not_advance_cursor(self):
+        engine = self._make_engine()
+        engine.start_run("abc", mode=RunMode.SPEED)
+
+        engine.process_keystroke("x", 1000)  # error at pos 0
+        assert engine.state.cursor_position == 0  # stays
+        assert engine.state.cognitive_errors == 1  # scored
+
+    def test_correct_key_after_error_advances(self):
+        engine = self._make_engine()
+        engine.start_run("abc", mode=RunMode.SPEED)
+
+        engine.process_keystroke("x", 1000)  # error
+        assert engine.state.cursor_position == 0
+
+        engine.process_keystroke("a", 1200)  # correct
+        assert engine.state.cursor_position == 1
+        # Error was already scored; correct retype not scored again
+        assert engine.state.cognitive_errors == 1
+        assert engine.state.total_scored_keystrokes == 1
+
+    def test_wrong_keys_ignored_during_correction(self):
+        engine = self._make_engine()
+        engine.start_run("abc", mode=RunMode.SPEED)
+
+        engine.process_keystroke("x", 1000)  # error
+        result = engine.process_keystroke("y", 1200)  # another wrong key
+        assert result is None  # ignored
+        assert engine.state.cursor_position == 0
+        # Only one error scored (from first attempt)
+        assert engine.state.cognitive_errors == 1
+
+    def test_backspace_clears_correction(self):
+        engine = self._make_engine()
+        engine.start_run("abc", mode=RunMode.SPEED)
+
+        engine.process_keystroke("x", 1000)  # error at pos 0
+        assert engine.state.error_correction_pos == 0
+
+        engine.process_keystroke("\b", 1200)  # backspace
+        assert engine.state.error_correction_pos is None
+        assert engine.state.cursor_position == 0
+
+    def test_full_run_with_corrections(self):
+        engine = self._make_engine()
+        engine.start_run("ab", mode=RunMode.SPEED)
+
+        engine.process_keystroke("x", 1000)  # error at pos 0
+        engine.process_keystroke("a", 1200)  # correct pos 0
+        engine.process_keystroke("b", 1400)  # correct pos 1
+
+        assert engine.state.is_finished
+        assert engine.state.cognitive_errors == 1
+        assert engine.state.total_scored_keystrokes == 2
+
+    def test_error_in_first_inputs(self):
+        """first_inputs shows error until correct key is typed."""
+        engine = self._make_engine()
+        engine.start_run("abc", mode=RunMode.SPEED)
+
+        engine.process_keystroke("x", 1000)
+        # first_inputs shows the error
+        actual, etype = engine.state.first_inputs[0]
+        assert actual == "x"
+        assert etype == ErrorType.COGNITIVE_ERROR
+
+        engine.process_keystroke("a", 1200)
+        # After correction, first_inputs updated
+        actual, etype = engine.state.first_inputs[0]
+        assert actual == "a"
+        assert etype == ErrorType.CORRECT
+
+
+class TestErrorHandlingForceBackspace:
+    """Tests for error_handling='force_backspace'."""
+
+    def _make_engine(self) -> TypingEngine:
+        config = Config(warmup_keystrokes=0, error_handling="force_backspace")
+        return TypingEngine(config)
+
+    def test_error_advances_then_blocks(self):
+        engine = self._make_engine()
+        engine.start_run("abc", mode=RunMode.SPEED)
+
+        engine.process_keystroke("x", 1000)  # error at pos 0, cursor -> 1
+        assert engine.state.cursor_position == 1
+        assert engine.state.cognitive_errors == 1
+        assert engine.state.error_correction_pos == 0
+
+    def test_only_backspace_accepted_after_error(self):
+        engine = self._make_engine()
+        engine.start_run("abc", mode=RunMode.SPEED)
+
+        engine.process_keystroke("x", 1000)  # error
+        result = engine.process_keystroke("b", 1200)  # try to type next
+        assert result is None  # blocked
+        assert engine.state.cursor_position == 1  # unchanged
+
+    def test_backspace_then_correct_key(self):
+        engine = self._make_engine()
+        engine.start_run("abc", mode=RunMode.SPEED)
+
+        engine.process_keystroke("x", 1000)  # error at pos 0
+        engine.process_keystroke("\b", 1200)  # backspace to pos 0
+        assert engine.state.cursor_position == 0
+        assert engine.state.error_correction_pos is None
+
+        engine.process_keystroke("a", 1400)  # correct pos 0
+        assert engine.state.cursor_position == 1
+
+    def test_full_run_with_corrections(self):
+        engine = self._make_engine()
+        engine.start_run("ab", mode=RunMode.SPEED)
+
+        engine.process_keystroke("x", 1000)  # error pos 0
+        engine.process_keystroke("\b", 1200)  # backspace
+        engine.process_keystroke("a", 1400)  # correct pos 0
+        engine.process_keystroke("b", 1600)  # correct pos 1
+
+        assert engine.state.is_finished
+        assert engine.state.cognitive_errors == 1
+        assert engine.state.total_scored_keystrokes == 2
+
+    def test_wrong_key_after_backspace_restarts_cycle(self):
+        """After backspace to error pos, wrong key starts a new correction cycle."""
+        engine = self._make_engine()
+        engine.start_run("abc", mode=RunMode.SPEED)
+
+        engine.process_keystroke("x", 1000)  # error pos 0, cursor -> 1
+        engine.process_keystroke("\b", 1200)  # backspace to pos 0, clears flag
+        engine.process_keystroke("y", 1400)  # wrong again at pos 0
+
+        # Not first input, so no re-scoring
+        assert engine.state.cognitive_errors == 1
+        # force_backspace: cursor advanced to 1, then blocked again
+        assert engine.state.cursor_position == 1
+        assert engine.state.error_correction_pos == 0
+
+    def test_relearning_mode_backspace_disabled(self):
+        """In relearning mode, backspace is disabled — force_backspace
+        still sets the flag but backspace won't move cursor."""
+        config = Config(warmup_keystrokes=0, error_handling="force_backspace")
+        engine = TypingEngine(config)
+        engine.start_run("abc", mode=RunMode.RELEARNING)
+
+        engine.process_keystroke("x", 1000)  # error at pos 0
+        assert engine.state.cursor_position == 1
+        assert engine.state.error_correction_pos == 0
+
+        # Backspace in relearning mode doesn't move cursor
+        engine.process_keystroke("\b", 1200)
+        # Cursor stays at 1, which is > error_correction_pos
+        # So correction is NOT cleared
+        assert engine.state.cursor_position == 1
