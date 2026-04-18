@@ -166,6 +166,45 @@ class TestRunCRUD:
         assert prev is not None
         assert prev.run_id == rid1
 
+    def test_capitalize_field_round_trip(self, tmp_path):
+        """capitalize field is saved and loaded correctly."""
+        repo = make_repo(tmp_path)
+        session = Session(start_time=datetime(2026, 1, 1, 10, 0, 0))
+        sid = repo.create_session(session)
+
+        run = RunResult(
+            start_time=datetime(2026, 1, 1, 10, 1, 0),
+            target_text="Haus der Welt",
+            target_length=13,
+            total_keystrokes=13,
+            capitalize=True,
+        )
+        rid = repo.save_run(run, sid)
+        loaded = repo.get_run_with_keystrokes(rid)
+        assert loaded is not None
+        assert loaded.capitalize is True
+
+        # Also check RunSummary
+        summaries = repo.get_all_runs_summary()
+        assert len(summaries) == 1
+        assert summaries[0].capitalize is True
+
+    def test_capitalize_default_false(self, tmp_path):
+        """capitalize defaults to False."""
+        repo = make_repo(tmp_path)
+        session = Session(start_time=datetime(2026, 1, 1, 10, 0, 0))
+        sid = repo.create_session(session)
+
+        run = RunResult(
+            start_time=datetime(2026, 1, 1, 10, 1, 0),
+            target_text="der die das",
+            target_length=11,
+            total_keystrokes=11,
+        )
+        rid = repo.save_run(run, sid)
+        summaries = repo.get_all_runs_summary()
+        assert summaries[0].capitalize is False
+
 
 class TestLetterStateCRUD:
     def test_save_and_load_letter_state(self, tmp_path):

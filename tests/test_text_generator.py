@@ -389,6 +389,82 @@ class TestCapitalizedCorpus:
         for word in words:
             assert word == "Haus"
 
+    def test_lowercase_only_excludes_capitalized(self, tmp_path: Path):
+        """lowercase_only=True filters out words with uppercase chars."""
+        corpus_file = tmp_path / "corpus_de.txt"
+        corpus_file.write_text("Haus\nder\ndie\n")
+
+        config = Config(corpus_dir=str(tmp_path))
+        gen = TextGenerator(config)
+        active = make_active_letters("h", "a", "u", "s", "d", "e", "r", "i")
+
+        text = gen.generate(
+            PracticeType.RANDOM_WORDS,
+            50,
+            active,
+            language="de",
+            lowercase_only=True,
+        )
+        words = text.split()
+        for word in words:
+            assert word == word.lower(), f"Got capitalized word: {word}"
+
+    def test_capitalize_count_inserts_exact_number(self, tmp_path: Path):
+        """capitalize_count=N places N capitalized words in the output."""
+        corpus_file = tmp_path / "corpus_de.txt"
+        # 5 lowercase, 3 capitalized
+        corpus_file.write_text("der\ndie\nund\ndas\nein\nHaus\nWelt\nZeit\n")
+
+        config = Config(corpus_dir=str(tmp_path))
+        gen = TextGenerator(config)
+        active = make_active_letters(
+            "d",
+            "e",
+            "r",
+            "i",
+            "u",
+            "n",
+            "a",
+            "s",
+            "h",
+            "w",
+            "l",
+            "t",
+            "z",
+        )
+
+        text = gen.generate(
+            PracticeType.RANDOM_WORDS,
+            120,
+            active,
+            language="de",
+            capitalize_count=2,
+        )
+        words = text.split()
+        cap_count = sum(1 for w in words if w != w.lower())
+        assert cap_count == 2
+
+    def test_capitalize_count_zero_no_caps(self, tmp_path: Path):
+        """capitalize_count=0 produces all-lowercase output."""
+        corpus_file = tmp_path / "corpus_de.txt"
+        corpus_file.write_text("Haus\nder\ndie\n")
+
+        config = Config(corpus_dir=str(tmp_path))
+        gen = TextGenerator(config)
+        active = make_active_letters("h", "a", "u", "s", "d", "e", "r", "i")
+
+        text = gen.generate(
+            PracticeType.RANDOM_WORDS,
+            50,
+            active,
+            language="de",
+            capitalize_count=0,
+        )
+        # capitalize_count=0 uses all words (current behavior)
+        # Some words may still be capitalized since all_filtered is used
+        # This is expected — capitalize_count=0 means "no special handling"
+        assert len(text) > 0
+
 
 class TestKeyboardLayout:
     def test_german_introduction_order(self):

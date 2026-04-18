@@ -1,7 +1,7 @@
-"""WPM over time chart, split by practice type.
+"""WPM over time chart, split by practice type and capitalization.
 
-Separate lines for each practice type (random_strings, random_words,
-sentences) so speed can be compared across different practice modes.
+Separate lines for each (practice_type, capitalize) combination so
+speed can be compared across different practice modes and settings.
 Failed runs marked with red scatter points.  X-axis is global run
 number to preserve chronological context.
 A secondary right Y-axis shows the number of unlocked (active) letters
@@ -24,6 +24,7 @@ from typing_trainer.ui.theme import (
     COLOR_BG_DARK,
     COLOR_ERROR,
     COLOR_INFO,
+    COLOR_MIRROR,
     COLOR_SUCCESS,
     COLOR_TEXT_PRIMARY,
     COLOR_TEXT_SECONDARY,
@@ -31,19 +32,28 @@ from typing_trainer.ui.theme import (
     app_font,
 )
 
-# Practice type display names and colors
-_PRACTICE_COLORS: dict[str, str] = {
-    "random_strings": COLOR_INFO,  # blue
-    "random_words": COLOR_SUCCESS,  # green
-    "sentences": COLOR_WARNING,  # yellow
-    "fix_keys": COLOR_ALERT,  # orange (distinct from Failed markers)
+# Display names and colors keyed by (practice_type, capitalize).
+# Entries without a capitalize variant use False as default.
+_GROUP_COLORS: dict[tuple[str, bool], str] = {
+    ("random_strings", False): COLOR_INFO,  # blue
+    ("random_words", False): COLOR_SUCCESS,  # green
+    ("random_words", True): "#2d8a2d",  # darker green
+    ("sentences", False): COLOR_WARNING,  # yellow
+    ("sentences", True): "#aaaa33",  # darker yellow
+    ("bigram_words", False): COLOR_MIRROR,  # purple
+    ("bigram_words", True): "#9944cc",  # darker purple
+    ("fix_keys", False): COLOR_ALERT,  # orange
 }
 
-_PRACTICE_LABELS: dict[str, str] = {
-    "random_strings": "Random Strings",
-    "random_words": "Random Words",
-    "sentences": "Sentences",
-    "fix_keys": "Fix Keys",
+_GROUP_LABELS: dict[tuple[str, bool], str] = {
+    ("random_strings", False): "Random Strings",
+    ("random_words", False): "Words",
+    ("random_words", True): "Words (Caps)",
+    ("sentences", False): "Sentences",
+    ("sentences", True): "Sentences (Caps)",
+    ("bigram_words", False): "Bigrams",
+    ("bigram_words", True): "Bigrams (Caps)",
+    ("fix_keys", False): "Fix Keys",
 }
 
 _COLOR_LETTERS = "#888888"
@@ -132,16 +142,19 @@ class WpmChart(QWidget):
         self._empty_label.setVisible(False)
         self._plot.setVisible(True)
 
-        # Group by practice type, keeping global run index
-        groups: dict[str, list[tuple[int, float, bool]]] = defaultdict(list)
+        # Group by (practice_type, capitalize), keeping global run index
+        groups: dict[tuple[str, bool], list[tuple[int, float, bool]]] = defaultdict(
+            list
+        )
         for i, r in enumerate(runs):
-            groups[r.practice_type].append((i + 1, r.wpm, r.failed))
+            key = (r.practice_type, r.capitalize)
+            groups[key].append((i + 1, r.wpm, r.failed))
 
-        # Plot each practice type as a separate line
-        for ptype in sorted(groups.keys()):
-            entries = groups[ptype]
-            color = _PRACTICE_COLORS.get(ptype, COLOR_TEXT_SECONDARY)
-            label = _PRACTICE_LABELS.get(ptype, ptype)
+        # Plot each group as a separate line
+        for group_key in sorted(groups.keys()):
+            entries = groups[group_key]
+            color = _GROUP_COLORS.get(group_key, COLOR_TEXT_SECONDARY)
+            label = _GROUP_LABELS.get(group_key, f"{group_key[0]}")
 
             x = np.array([e[0] for e in entries], dtype=np.float64)
             y = np.array([e[1] for e in entries], dtype=np.float64)

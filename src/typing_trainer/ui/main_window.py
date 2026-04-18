@@ -756,7 +756,15 @@ class MainWindow(QMainWindow):
 
         # Generate text using selected letters (user may have deselected some)
         selected_letters = self._config_widget.get_selected_letters()
-        target_text = self.text_gen.generate(practice_type, length, selected_letters)
+        lowercase_only = self._config_widget.get_lowercase_only()
+        capitalize_count = self._config_widget.get_capitalize_count()
+        target_text = self.text_gen.generate(
+            practice_type,
+            length,
+            selected_letters,
+            lowercase_only=lowercase_only,
+            capitalize_count=capitalize_count,
+        )
 
         if not target_text:
             return
@@ -816,6 +824,11 @@ class MainWindow(QMainWindow):
     def _on_run_finished(self) -> None:
         """Handle run completion or failure."""
         result = self.engine.finish_run()
+
+        # Track whether this run required capitalization (Shift key).
+        result.capitalize = self.config.require_capitalization and any(
+            c.isupper() for c in result.target_text
+        )
 
         # Save to database
         if (

@@ -1,12 +1,14 @@
-"""Accuracy over time chart.
+"""Accuracy over time chart, split by practice type and capitalization.
 
-Line plot showing per-run accuracy with a 95% threshold reference line.
+Separate lines for each (practice_type, capitalize) combination.
 Failed runs are marked with red scatter points.
 A secondary right Y-axis shows the number of unlocked (active) letters
 as a step line.
 """
 
 from __future__ import annotations
+
+from collections import defaultdict
 
 import numpy as np
 import pyqtgraph as pg
@@ -15,10 +17,10 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from typing_trainer.storage.repository import Repository
+from typing_trainer.ui.charts.wpm_chart import _GROUP_COLORS, _GROUP_LABELS
 from typing_trainer.ui.theme import (
     COLOR_BG_DARK,
     COLOR_ERROR,
-    COLOR_SUCCESS,
     COLOR_TEXT_PRIMARY,
     COLOR_TEXT_SECONDARY,
     COLOR_WARNING,
@@ -49,6 +51,7 @@ class AccuracyChart(QWidget):
 
         # Y-axis as percentage
         self._plot.getViewBox().setYRange(0.7, 1.02, padding=0)
+        self._plot.addLegend(offset=(10, 10))
 
         # Second Y-axis (right) for active letter count
         self._right_y_range: tuple[float, float] | None = None
@@ -97,6 +100,9 @@ class AccuracyChart(QWidget):
         """Reload data from DB and redraw."""
         self._plot.clear()
         self._right_vb.clear()
+        plot_item = self._plot.plotItem
+        if plot_item is not None and plot_item.legend is not None:
+            plot_item.legend.clear()
 
         runs = repo.get_all_runs_summary()
         if not runs:
@@ -106,24 +112,43 @@ class AccuracyChart(QWidget):
         self._empty_label.setVisible(False)
         self._plot.setVisible(True)
 
-        # Separate passed and failed runs
-        x_all = np.array([i + 1 for i in range(len(runs))], dtype=np.float64)
-        y_all = np.array([r.accuracy for r in runs], dtype=np.float64)
+        # Group by (practice_type, capitalize)
+        groups: dict[tuple[str, bool], list[tuple[int, float, bool]]] = defaultdict(
+            list
+        )
+        for i, r in enumerate(runs):
+            key = (r.practice_type, r.capitalize)
+            groups[key].append((i + 1, r.accuracy, r.failed))
 
+        # Collect all y-values for auto-ranging
+        all_y: list[float] = []
+
+        for group_key in sorted(groups.keys()):
+            entries = groups[group_key]
+            color = _GROUP_COLORS.get(group_key, COLOR_TEXT_SECONDARY)
+            label = _GROUP_LABELS.get(group_key, f"{group_key[0]}")
+
+            x = np.array([e[0] for e in entries], dtype=np.float64)
+            y = np.array([e[1] for e in entries], dtype=np.float64)
+            all_y.extend(y.tolist())
+
+            self._plot.plot(
+                x,
+                y,
+                pen=pg.mkPen(color, width=2),
+                symbol="o",
+                symbolPen=color,
+                symbolBrush=color,
+                symbolSize=4,
+                name=label,
+            )
+
+        # Failed runs as red X markers (across all types)
         x_failed = np.array(
             [i + 1 for i, r in enumerate(runs) if r.failed], dtype=np.float64
         )
         y_failed = np.array([r.accuracy for r in runs if r.failed], dtype=np.float64)
 
-        # Main accuracy line
-        self._plot.plot(
-            x_all,
-            y_all,
-            pen=pg.mkPen(COLOR_SUCCESS, width=2),
-            symbol=None,
-        )
-
-        # Failed runs as red markers
         if len(x_failed) > 0:
             self._plot.plot(
                 x_failed,
@@ -133,6 +158,7 @@ class AccuracyChart(QWidget):
                 symbolPen=COLOR_ERROR,
                 symbolBrush=COLOR_ERROR,
                 symbolSize=10,
+                name="Failed",
             )
 
         # 95% threshold line
@@ -167,9 +193,8 @@ class AccuracyChart(QWidget):
             self._right_vb.setYRange(*self._right_y_range, padding=0)
 
         # Auto-range left y-axis
-        self._plot.getViewBox().setYRange(
-            max(0.5, float(y_all.min()) - 0.05), 1.02, padding=0
-        )
+        y_min = min(all_y) if all_y else 0.7
+        self._plot.getViewBox().setYRange(max(0.5, y_min - 0.05), 1.02, padding=0)
 
         # Force geometry update
         self._update_right_vb()

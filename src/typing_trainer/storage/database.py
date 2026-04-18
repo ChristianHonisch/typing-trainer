@@ -9,7 +9,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 9
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -48,7 +48,8 @@ CREATE TABLE IF NOT EXISTS runs (
     wpm                     REAL NOT NULL DEFAULT 0.0,
     completed               INTEGER NOT NULL DEFAULT 0,
     failed                  INTEGER NOT NULL DEFAULT 0,
-    fail_threshold_used     REAL NOT NULL DEFAULT 0.0
+    fail_threshold_used     REAL NOT NULL DEFAULT 0.0,
+    capitalize              INTEGER NOT NULL DEFAULT 0
 );
 
 -- Keystrokes: each row is one physical keypress.
@@ -269,6 +270,29 @@ class Database:
 
             repo = Repository(self)
             repo.bootstrap_mastery()
+            self.conn.commit()
+
+        if current_version < 8:
+            # v8: Add capitalize column to runs.
+            # Default 0 — all existing runs were lowercase (pre-capitalization
+            # corpus).  New runs set the value explicitly based on whether
+            # the target text contains uppercase letters.
+            if "capitalize" not in runs_columns:
+                self.conn.execute(
+                    "ALTER TABLE runs ADD COLUMN capitalize INTEGER NOT NULL DEFAULT 0"
+                )
+            self.conn.commit()
+
+        if current_version < 9:
+            # v9: Normalize expected_char to lowercase in keystrokes.
+            # Capitalized German nouns introduced uppercase expected_char
+            # values (e.g. 'H' from "Haus"), causing duplicate letter
+            # entries in charts.  Per-letter stats should always use
+            # lowercase physical keys.
+            self.conn.execute(
+                "UPDATE keystrokes SET expected_char = LOWER(expected_char) "
+                "WHERE expected_char != LOWER(expected_char)"
+            )
             self.conn.commit()
 
         if current_version < SCHEMA_VERSION:

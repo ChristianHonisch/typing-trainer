@@ -41,6 +41,7 @@ class RunSummary:
     wpm: float
     failed: bool
     practice_type: str = ""
+    capitalize: bool = False
 
 
 def _dt_to_str(dt: datetime | None) -> str | None:
@@ -142,8 +143,8 @@ class Repository:
                 target_text, target_length, total_keystrokes, cognitive_errors,
                 motor_overflow_errors, burst_repeat_count, backspace_count,
                 swap_count, accuracy, wpm,
-                completed, failed, fail_threshold_used)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                completed, failed, fail_threshold_used, capitalize)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 session_id,
                 _dt_to_str(run.start_time),
@@ -163,6 +164,7 @@ class Repository:
                 int(run.completed),
                 int(run.failed),
                 run.fail_threshold_used,
+                int(run.capitalize),
             ),
         )
         if cursor.lastrowid is None:
@@ -191,7 +193,7 @@ class Repository:
                 run_id,
                 ks.position,
                 ks.timestamp_ms,
-                ks.expected_char,
+                ks.expected_char.lower(),  # normalize to lowercase
                 ks.actual_char,
                 ks.error_type.value,
                 ks.reaction_time_ms,
@@ -267,6 +269,8 @@ class Repository:
         return self._row_to_run(row)
 
     def _row_to_run(self, row) -> RunResult:
+        # COALESCE handles DBs not yet migrated to v8.
+        capitalize_val = row["capitalize"] if "capitalize" in row.keys() else 0
         return RunResult(
             run_id=row["id"],
             session_id=row["session_id"],
@@ -287,6 +291,7 @@ class Repository:
             completed=bool(row["completed"]),
             failed=bool(row["failed"]),
             fail_threshold_used=row["fail_threshold_used"],
+            capitalize=bool(capitalize_val),
         )
 
     # ── Letter States ─────────────────────────────────────────────────
@@ -711,7 +716,9 @@ class Repository:
         Returns list ordered by run ID (chronological).
         """
         rows = self.db.conn.execute(
-            "SELECT id, accuracy, wpm, failed, practice_type FROM runs ORDER BY id"
+            """SELECT id, accuracy, wpm, failed, practice_type,
+                      COALESCE(capitalize, 0) AS capitalize
+               FROM runs ORDER BY id"""
         ).fetchall()
         return [
             RunSummary(
@@ -720,6 +727,7 @@ class Repository:
                 wpm=row["wpm"],
                 failed=bool(row["failed"]),
                 practice_type=row["practice_type"] or "",
+                capitalize=bool(row["capitalize"]),
             )
             for row in rows
         ]

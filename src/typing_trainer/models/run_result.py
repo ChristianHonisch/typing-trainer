@@ -96,6 +96,9 @@ class RunResult:
     fail_threshold_used: float = 0.0
     """The fail threshold that was active for this run."""
 
+    capitalize: bool = False
+    """True if the run required typing uppercase letters (Shift key)."""
+
     # Derived
     accuracy: float = 1.0
     """accuracy = (correct - cognitive_errors) / correct, excluding motor overflow."""

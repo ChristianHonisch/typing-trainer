@@ -39,23 +39,16 @@ def _make_run(
         1
         for ks in keystrokes
         if not ks.is_backspace
-        and ks.error_type
-        not in (ErrorType.MOTOR_OVERFLOW, ErrorType.BURST_REPEAT)
+        and ks.error_type not in (ErrorType.MOTOR_OVERFLOW, ErrorType.BURST_REPEAT)
     )
     cognitive_errors = sum(
-        1
-        for ks in keystrokes
-        if ks.error_type == ErrorType.COGNITIVE_ERROR
+        1 for ks in keystrokes if ks.error_type == ErrorType.COGNITIVE_ERROR
     )
     motor_overflow_errors = sum(
-        1
-        for ks in keystrokes
-        if ks.error_type == ErrorType.MOTOR_OVERFLOW
+        1 for ks in keystrokes if ks.error_type == ErrorType.MOTOR_OVERFLOW
     )
     accuracy = (
-        (total_scored - cognitive_errors) / total_scored
-        if total_scored > 0
-        else 1.0
+        (total_scored - cognitive_errors) / total_scored if total_scored > 0 else 1.0
     )
 
     run = RunResult(
@@ -87,9 +80,7 @@ def _read_keystrokes(repo: Repository, run_id: int):
 
 def _read_run(repo: Repository, run_id: int):
     """Read the run row from the DB."""
-    return repo.db.conn.execute(
-        "SELECT * FROM runs WHERE id = ?", (run_id,)
-    ).fetchone()
+    return repo.db.conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
 
 
 # ── Tests ─────────────────────────────────────────────────────────────
@@ -641,10 +632,8 @@ class TestMigrationGuard:
         db = Database(str(tmp_path / "test.db"))
         db.initialize()
 
-        version = db.conn.execute(
-            "SELECT version FROM schema_version"
-        ).fetchone()
-        assert version[0] == 7
+        version = db.conn.execute("SELECT version FROM schema_version").fetchone()
+        assert version[0] == 9
 
     def test_second_initialize_skips_reclassification(self, tmp_path):
         """Re-initializing the same DB should not re-run reclassification."""
@@ -672,8 +661,6 @@ class TestMigrationGuard:
         db2 = Database(db_path)
         db2.initialize()
 
-        version = db2.conn.execute(
-            "SELECT version FROM schema_version"
-        ).fetchone()
-        assert version[0] == 7
+        version = db2.conn.execute("SELECT version FROM schema_version").fetchone()
+        assert version[0] == 9
         db2.close()

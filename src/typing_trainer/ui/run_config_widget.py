@@ -331,6 +331,50 @@ class RunConfigWidget(QWidget):
 
         layout.addLayout(single_letter_layout)
 
+        # --- Capitalization controls (Build Speed / Smooth Pairs) ---
+        cap_layout = QHBoxLayout()
+        cap_layout.setSpacing(6)
+
+        self._lowercase_only_cb = QCheckBox("Lowercase only")
+        self._lowercase_only_cb.setFont(app_font(10))
+        self._lowercase_only_cb.setChecked(False)
+        self._lowercase_only_cb.setToolTip(
+            "Exclude capitalized words (e.g. German nouns). "
+            "Only lowercase words will appear."
+        )
+        self._lowercase_only_cb.stateChanged.connect(self._on_lowercase_only_changed)
+        cap_layout.addWidget(self._lowercase_only_cb)
+
+        cap_layout.addSpacing(16)
+
+        self._cap_count_label = QLabel("Capitalized:")
+        self._cap_count_label.setFont(app_font(10))
+        cap_layout.addWidget(self._cap_count_label)
+
+        self._cap_count_spin = QSpinBox()
+        self._cap_count_spin.setFont(app_font(10))
+        self._cap_count_spin.setRange(0, 30)
+        self._cap_count_spin.setValue(3)
+        self._cap_count_spin.setSingleStep(1)
+        self._cap_count_spin.setToolTip(
+            "Number of capitalized words to include in the text. "
+            "Set to 0 for all-lowercase."
+        )
+        self._cap_count_spin.setFixedWidth(60)
+        self._cap_count_spin.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self._cap_count_spin.wheelEvent = lambda e: e.ignore()  # type: ignore[assignment]
+        cap_layout.addWidget(self._cap_count_spin)
+
+        cap_layout.addStretch()
+
+        self._capitalize_widgets: list[QWidget] = [
+            self._lowercase_only_cb,
+            self._cap_count_label,
+            self._cap_count_spin,
+        ]
+
+        layout.addLayout(cap_layout)
+
         layout.addStretch()
 
         # Rest timer label (shown after a run completes)
@@ -414,6 +458,13 @@ class RunConfigWidget(QWidget):
         is_speed_or_transition = preset in ("Build Speed", "Smooth Pairs")
         for w in self._all_letters_widgets:
             w.setVisible(is_speed_or_transition)
+
+        # Capitalization controls (Build Speed / Smooth Pairs only)
+        for w in self._capitalize_widgets:
+            w.setVisible(is_speed_or_transition)
+        # Hide capitalize count when lowercase-only is checked
+        if is_speed_or_transition:
+            self._update_capitalize_visibility()
 
         # Enable/disable toggle buttons based on "All keys" state
         all_keys = is_speed_or_transition and self._all_letters_cb.isChecked()
@@ -776,7 +827,40 @@ class RunConfigWidget(QWidget):
         return {letter for letter, _ in candidates[:n]}
 
     # ------------------------------------------------------------------
-    # Alerts, bigrams
+    # Capitalization, single letter, alerts, bigrams
+
+    def _on_lowercase_only_changed(self, _state: int) -> None:
+        """Handle lowercase-only checkbox change."""
+        self._update_capitalize_visibility()
+
+    def _update_capitalize_visibility(self) -> None:
+        """Show/hide capitalize count controls based on lowercase-only state."""
+        lc_only = self._lowercase_only_cb.isChecked()
+        self._cap_count_label.setVisible(not lc_only)
+        self._cap_count_spin.setVisible(not lc_only)
+
+    def get_lowercase_only(self) -> bool:
+        """Whether lowercase-only mode is active.
+
+        Only meaningful for Build Speed / Smooth Pairs.  Returns ``False``
+        when the checkbox is hidden.
+        """
+        return (
+            self._lowercase_only_cb.isVisible() and self._lowercase_only_cb.isChecked()
+        )
+
+    def get_capitalize_count(self) -> int | None:
+        """Number of capitalized words to include, or ``None``.
+
+        Returns ``None`` when the control is hidden (Learn Keys /
+        Fix Keys) or when lowercase-only mode is active.
+        """
+        if not self._cap_count_spin.isVisible():
+            return None
+        if self._lowercase_only_cb.isChecked():
+            return None
+        return self._cap_count_spin.value()
+
     def get_single_letter_mode(self) -> bool:
         """Whether single-letter display mode is enabled.
 

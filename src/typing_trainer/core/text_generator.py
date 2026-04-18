@@ -37,6 +37,9 @@ class TextGenerator:
         length: int,
         active_letters: dict[str, LetterStats],
         language: str | None = None,
+        *,
+        lowercase_only: bool = False,
+        capitalize_count: int | None = None,
     ) -> str:
         """Generate practice text.
 
@@ -45,6 +48,11 @@ class TextGenerator:
             length: Target number of characters (approximate for word modes).
             active_letters: Current active letter set with stats.
             language: Language for corpus. Defaults to config.language.
+            lowercase_only: If ``True``, exclude words containing uppercase
+                letters from the corpus (e.g. German nouns).
+            capitalize_count: If set, include exactly this many capitalized
+                words in the output, filling the rest with lowercase words.
+                Ignored when ``lowercase_only`` is ``True``.
 
         Returns:
             Generated text string.
@@ -56,7 +64,13 @@ class TextGenerator:
             case PracticeType.RANDOM_STRINGS | PracticeType.FIX_KEYS:
                 text = self._generate_random_strings(length, active_letters, language)
             case PracticeType.RANDOM_WORDS:
-                text = self._generate_random_words(length, active_letters, language)
+                text = self._generate_random_words(
+                    length,
+                    active_letters,
+                    language,
+                    lowercase_only=lowercase_only,
+                    capitalize_count=capitalize_count,
+                )
             case PracticeType.SENTENCES:
                 text = self._generate_sentences(length, language)
             case PracticeType.BIGRAM_WORDS:
@@ -65,6 +79,8 @@ class TextGenerator:
                     active_letters,
                     language,
                     self._target_bigrams,
+                    lowercase_only=lowercase_only,
+                    capitalize_count=capitalize_count,
                 )
             case _:
                 text = ""
@@ -208,27 +224,45 @@ class TextGenerator:
         length: int,
         active_letters: dict[str, LetterStats],
         language: str,
+        *,
+        lowercase_only: bool = False,
+        capitalize_count: int | None = None,
     ) -> str:
         """Generate text from real words, filtered to active letter set.
 
         Words are selected weighted toward letters that need practice.
+
+        Args:
+            lowercase_only: Exclude words with uppercase characters.
+            capitalize_count: Include exactly this many capitalized words
+                (placed at random positions).  Ignored when ``lowercase_only``
+                is ``True``.
         """
         active_set = set(active_letters.keys())
-        words = self._get_filtered_words(active_set, language)
+        all_filtered = self._get_filtered_words(active_set, language)
+
+        if not all_filtered:
+            return self._generate_random_strings(length, active_letters, language)
+
+        # Split into lowercase-only and capitalized pools
+        lower_words = [w for w in all_filtered if w == w.lower()]
+        cap_words = [w for w in all_filtered if w != w.lower()]
+
+        if lowercase_only:
+            words = lower_words if lower_words else all_filtered
+        elif capitalize_count is not None and capitalize_count > 0 and cap_words:
+            words = lower_words if lower_words else all_filtered
+        else:
+            words = all_filtered
 
         if not words:
-            # Fall back to random strings if no words match
             return self._generate_random_strings(length, active_letters, language)
 
         # Weight words by their letter composition.
-        # Use the maximum letter weight in the word so that any word
-        # containing a high-need letter gets prioritized.  Mean-based
-        # weighting dilutes the signal (a 6-letter word with one
-        # struggling letter barely differs from an all-stable word).
         _, letter_weights_map = self._compute_weights_map(active_letters)
         word_weights = []
         for word in words:
-            w = max(letter_weights_map.get(c, 1.0) for c in word)
+            w = max(letter_weights_map.get(c.lower(), 1.0) for c in word)
             word_weights.append(w)
 
         result_parts: list[str] = []
@@ -242,10 +276,27 @@ class TextGenerator:
             result_parts.append(word)
             current_length += len(word)
 
+        # Insert exactly capitalize_count capitalized words at random positions
+        if (
+            not lowercase_only
+            and capitalize_count is not None
+            and capitalize_count > 0
+            and cap_words
+        ):
+            word_indices = [i for i, part in enumerate(result_parts) if part != " "]
+            n_to_replace = min(capitalize_count, len(word_indices))
+            replace_indices = random.sample(word_indices, n_to_replace)
+            cap_weights = [
+                max(letter_weights_map.get(c.lower(), 1.0) for c in w)
+                for w in cap_words
+            ]
+            for idx in replace_indices:
+                cap_word = random.choices(cap_words, weights=cap_weights, k=1)[0]
+                result_parts[idx] = cap_word
+
         text = "".join(result_parts)
         # Trim to approximate length (don't cut mid-word if possible)
         if len(text) > length + 10:
-            # Find last space before the limit
             cut_point = text.rfind(" ", 0, length + 1)
             if cut_point > 0:
                 text = text[:cut_point]
@@ -451,6 +502,9 @@ class TextGenerator:
         active_letters: dict[str, LetterStats],
         language: str,
         target_bigrams: list[tuple[str, str]],
+        *,
+        lowercase_only: bool = False,
+        capitalize_count: int | None = None,
     ) -> str:
         """Generate text from real words targeting specific bigram transitions.
 
@@ -466,10 +520,17 @@ class TextGenerator:
             active_letters: Current active letter set.
             language: Corpus language.
             target_bigrams: List of (prev_char, next_char) pairs.
+            lowercase_only: Exclude words with uppercase characters.
+            capitalize_count: Include exactly this many capitalized words.
         """
         if not target_bigrams:
-            # No targets selected — fall back to normal random words
-            return self._generate_random_words(length, active_letters, language)
+            return self._generate_random_words(
+                length,
+                active_letters,
+                language,
+                lowercase_only=lowercase_only,
+                capitalize_count=capitalize_count,
+            )
 
         active_set = set(active_letters.keys())
 
@@ -478,6 +539,10 @@ class TextGenerator:
         filtered_words = [
             w for w in all_words if all(c in active_set or c == " " for c in w.lower())
         ]
+
+        # Apply lowercase_only filter
+        if lowercase_only:
+            filtered_words = [w for w in filtered_words if w == w.lower()]
 
         # Identify bigram words and normal words
         bigram_words: list[str] = []
@@ -494,15 +559,24 @@ class TextGenerator:
         # Normal words always stay filtered to active letters.
         min_bigram_words = 20
         if len(bigram_words) < min_bigram_words:
+            unfiltered = all_words
+            if lowercase_only:
+                unfiltered = [w for w in unfiltered if w == w.lower()]
             bigram_words_unfiltered = [
-                w for w in all_words if self._word_contains_bigram(w, target_bigrams)
+                w for w in unfiltered if self._word_contains_bigram(w, target_bigrams)
             ]
             if len(bigram_words_unfiltered) > len(bigram_words):
                 bigram_words = bigram_words_unfiltered
 
         # If still no bigram words, fall back entirely
         if not bigram_words:
-            return self._generate_random_words(length, active_letters, language)
+            return self._generate_random_words(
+                length,
+                active_letters,
+                language,
+                lowercase_only=lowercase_only,
+                capitalize_count=capitalize_count,
+            )
 
         # If no normal words, use only bigram words (unusual but possible)
         if not normal_words:
@@ -525,6 +599,19 @@ class TextGenerator:
                 current_length += 1
             result_parts.append(word)
             current_length += len(word)
+
+        # Insert capitalized words at random positions
+        if not lowercase_only and capitalize_count is not None and capitalize_count > 0:
+            cap_pool = [w for w in filtered_words if w != w.lower()]
+            if not cap_pool:
+                # Try from full unfiltered corpus
+                cap_pool = [w for w in all_words if w != w.lower()]
+            if cap_pool:
+                word_indices = [i for i, part in enumerate(result_parts) if part != " "]
+                n_to_replace = min(capitalize_count, len(word_indices))
+                replace_indices = random.sample(word_indices, n_to_replace)
+                for idx in replace_indices:
+                    result_parts[idx] = random.choice(cap_pool)
 
         text = "".join(result_parts)
         if len(text) > length + 10:
