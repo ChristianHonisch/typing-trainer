@@ -11,6 +11,7 @@ Shows:
 
 from __future__ import annotations
 
+import math
 from collections import deque
 
 import numpy as np
@@ -381,7 +382,10 @@ class RunSummaryWidget(QWidget):
         if result.burst_repeat_count > 0:
             lines.append(f"Burst repeats:       {result.burst_repeat_count}")
         lines.append(f"Backspaces:          {result.backspace_count}")
-        lines.append(f"Accuracy:            {result.accuracy:.1%}")
+        # Floor-truncate so the display never exceeds the raw value
+        # (avoids showing "95.0%" when actual is 94.98%).
+        acc_pct = math.floor(result.accuracy * 1000) / 10
+        lines.append(f"Accuracy:            {acc_pct:.1f}%")
         lines.append(f"WPM:                 {result.wpm:.1f}")
 
         # Duration
